@@ -22,13 +22,58 @@ import Test.QuickCheck
 import qualified Data.HMAC as HMAC (hmac_sha1)
 
 ---------------------------------------------------------------------
-
+-- * PBKDF2.
+--
+-- Pseudocode specification for PBKDF2:
+--
+--     1. If dkLen > (2^32 - 1) * hLen, output "derived key too long" and
+--        stop.
+--
+--     2. Let l be the number of hLen-octet blocks in the derived key,
+--        rounding up, and let r be the number of octets in the last
+--        block:
+--
+--                 l = ceiling (dkLen / hLen) ,
+--                 r = dkLen - (l - 1) * hLen .
+--
+--     3. For each block of the derived key apply the function F defined
+--        below to the password P, the salt S, the iteration count c, and
+--        the block index to compute the block:
+--
+--                 T_1 = F (P, S, c, 1) ,
+--                 T_2 = F (P, S, c, 2) ,
+--                 ...
+--                 T_l = F (P, S, c, l) ,
+--
+--        where the function F is defined as the exclusive-or sum of the
+--        first c iterates of the underlying pseudorandom function PRF
+--        applied to the password P and the concatenation of the salt S
+--        and the block index i:
+--
+--                 F (P, S, c, i) = U_1 ⊕ U_2 ⊕ ... ⊕ U_c
+--
+--         where
+--
+--                 U_1 = PRF (P, S ∥ int (i)) ,
+--                 U_2 = PRF (P, U_1) ,
+--                 ...
+--                 U_c = PRF (P, U_{c-1}) .
+--
+--     4. Concatenate the blocks and extract the first dkLen octets to
+--        produce a derived key DK:
+--
+--                 DK = T_1 ∥ T_2 ∥ ... ∥ T_l<0..r-1>
+--
+--     5. Output the derived key DK.
+--
 type Password = [Word8] -- password, an octet string.
 type Salt     = [Word8] -- salt, an octet string.
 type Hash     = [Word8] -- derived key, a dkLen-octet string.
 
-pbkdf2 :: Password -> Salt -> Integer -> Integer -> Hash 
-pbkdf2 pswd salt c dkLen =
+pbkdf2 :: Password -> Salt -> Integer -> Integer -> Hash
+pbkdf2 pswd salt c dkLen
+  | dkLen > (2^32 - 1) * hLen = error "derived key too long"
+  | otherwise =
   let l  = dkLen `mdiv` hLen
       r  = dkLen - (l - 1) * hLen
 
@@ -52,9 +97,9 @@ int i | length o > 4 = error "size of INT(i) > four-octet"
   where o = unroll i
 
 ---------------------------------------------------------------------
--- ** Pre-defined parts (since we're going with SHA1).
-
--- Pseudocode specification for HMAC-SHA1.
+-- ** HMAC-SHA1.
+--
+-- Pseudocode specification for HMAC-SHA1:
 --
 --  function hmac (key, message) {
 --    if (length(key) > blocksize) {
@@ -63,10 +108,9 @@ int i | length o > 4 = error "size of INT(i) > four-octet"
 --    if (length(key) < blocksize) {
 --        key = key ∥ [0x00 * (blocksize - length(key))]
 --    }
---   
 --    o_key_pad = [0x5c * blocksize] ⊕ key
 --    i_key_pad = [0x36 * blocksize] ⊕ key
---   
+--
 --    return hash(o_key_pad ∥ hash(i_key_pad ∥ message))
 --  }
 --
@@ -75,23 +119,23 @@ int i | length o > 4 = error "size of INT(i) > four-octet"
 --   * '⊕' is exclusive or (XOR)
 --   * '*' is repetition.
 --   * 'blocksize' is that of the underlying hash function
+--      (64 for SHA1)
 --      
 hmac :: [Word8] -- message, an octet string.
      -> [Word8] -- encryption key, an octet string.
      -> [Word8] -- encoded message, an octet string.
-hmac msg key =
-      let nkey = case compare (length key) blocksize of
-            GT -> hash key
-            LT -> key ++ replicate (blocksize - length key) 0x00
-            EQ -> key
-
-          opad = (replicate blocksize 0x5c) `mxor` nkey
-          ipad = (replicate blocksize 0x36) `mxor` nkey
-      in
-      hash(opad ++ hash(ipad ++ msg))
-  where 
-    blocksize :: Int 
-    blocksize = 64
+hmac msg ikey =
+  let key = case compare (length ikey) blocksize of
+        GT -> hash ikey
+        LT -> ikey ++ (0x00 * (blocksize - length ikey))
+        EQ -> ikey
+      o_key_pad = (0x5c * blocksize) `mxor` key
+      i_key_pad = (0x36 * blocksize) `mxor` key
+  in
+  hash(o_key_pad ++ hash(i_key_pad ++ msg))
+  where
+    (*)       = flip replicate :: Word8 -> Int -> [Word8]    
+    blocksize = 64 :: Int
 
 -- length in octets of pseudorandom function output, 
 -- a positive integer. (SHA1 outputs 160 bits).
@@ -110,7 +154,7 @@ mdiv :: Integer -> Integer -> Integer
 mdiv a b = ceiling ((fromIntegral a) / (fromIntegral b))
 
 mxor :: [Word8] -> [Word8] -> [Word8]
-mxor = zipWith (.|.)
+mxor = zipWith (xor)
 
 unroll :: Integer -> [Word8]
 unroll = unfoldr stepR
@@ -139,6 +183,10 @@ octets w =
 
 ----------------------------------------------------------------------
 -- ** Testing & QuickCheck.
+
+-- DK = PBKDF2(HMAC−SHA1, passphrase, ssid, 4096, 256) in WPA2.
+
+wpa2 pswd salt = pbkdf2 pswd salt 4096 256
 
 -- HMAC_SHA1("key", "The quick brown fox jumps over the lazy dog") =
 --   0xde7c9b85b8b78aa6bc8a7a36f70a90701c9db4d9
