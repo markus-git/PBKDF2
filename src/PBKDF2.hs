@@ -127,14 +127,14 @@ hmac :: [Word8] -- message, an octet string.
 hmac msg ikey =
   let key = case compare (length ikey) blocksize of
         GT -> hash ikey
-        LT -> ikey ++ (0x00 * (blocksize - length ikey))
+        LT -> ikey ++ (0x00 `repeat` (blocksize - length ikey))
         EQ -> ikey
-      o_key_pad = (0x5c * blocksize) `mxor` key
-      i_key_pad = (0x36 * blocksize) `mxor` key
+      o_key_pad = (0x5c `repeat` blocksize) `mxor` key
+      i_key_pad = (0x36 `repeat` blocksize) `mxor` key
   in
   hash(o_key_pad ++ hash(i_key_pad ++ msg))
   where
-    (*)       = flip replicate :: Word8 -> Int -> [Word8]    
+    repeat    = flip replicate :: Word8 -> Int -> [Word8]    
     blocksize = 64 :: Int
 
 -- length in octets of pseudorandom function output, 
