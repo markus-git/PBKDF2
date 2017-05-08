@@ -75,10 +75,11 @@ pbkdf2 pswd salt c dkLen
   | dkLen > (2^32 - 1) * hLen = error "derived key too long"
   | otherwise =
   let l  = dkLen `mdiv` hLen
-      r  = dkLen - (l - 1) * hLen
 
       us :: Integer -> [[Word8]]
-      us i = take (fromInteger c) $ iterate (hmac pswd) (hmac pswd (salt ++ int i))
+      us i = take (fromInteger c)
+           $ iterate (hmac pswd)
+           $ hmac pswd (salt ++ pbkdf2_int i)
 
       f :: Integer -> [Word8]
       f i = foldr1 mxor (us i)
@@ -86,14 +87,19 @@ pbkdf2 pswd salt c dkLen
       ts :: [[Word8]]
       ts = map f [1..l]
   in
-  take (fromInteger r - 1) (concat ts)
+  take (fromInteger dkLen) $ concat ts
+
+-- I have slightly modified the algorithm and skipped 'r', which is used to
+-- drop any extra octates from rounding in 'l'. But since these are dropped from
+-- the last block, we could just as well grab the 'dkLen' first blocks instead.
 
 -- INT (i) is a four-octet encoding of the integer i,
 -- most significant octet first.
-int :: Integer -> [Word8]
-int i | length o > 4 = error "size of INT(i) > four-octet"
-      | length o < 4 = replicate (4 - length o) 0x00 ++ o
-      | otherwise    = o
+pbkdf2_int :: Integer -> [Word8]
+pbkdf2_int i
+  | length o > 4 = error "size of INT(i) > four-octet"
+  | length o < 4 = replicate (4 - length o) 0x00 ++ o
+  | otherwise    = o
   where o = unroll i
 
 --------------------------------------------------------------------------------
@@ -113,7 +119,7 @@ int i | length o > 4 = error "size of INT(i) > four-octet"
 --     ipad = the byte 0x36 repeated B times
 --     opad = the byte 0x5C repeated B times.
 --
--- To compute HMAC over the data `text' we perform
+-- To compute HMAC over the data 'text' we perform
 --
 --     H(K XOR opad, H(K XOR ipad, text))
 --
@@ -156,16 +162,16 @@ hmac :: [Word8] -- message, an octet string.
      -> [Word8] -- encryption key, an octet string.
      -> [Word8] -- encoded message, an octet string.
 hmac msg key =
-  let sized_key = hmac_fitted_key key
+  let sized_key = hmac_padded_key key
       o_key_pad = (0x5c `mrepeat` hmac_blocksize) `mxor` sized_key
       i_key_pad = (0x36 `mrepeat` hmac_blocksize) `mxor` sized_key
   in
   hash(o_key_pad ++ hash(i_key_pad ++ msg))
 
-hmac_fitted_key :: [Word8] -> [Word8]
-hmac_fitted_key key
-  | length key > hmac_blocksize = hmac_fitted_key (hash key)
-  | otherwise  = key ++ (0x00 `mrepeat` (hmac_blocksize - length key))
+hmac_padded_key :: [Word8] -> [Word8]
+hmac_padded_key key = k ++ (0x00 `mrepeat` (hmac_blocksize - length k))
+  where k | length key > hmac_blocksize = hash key
+          | otherwise                   = key
 
 hmac_blocksize :: Int
 hmac_blocksize = 64
@@ -176,18 +182,25 @@ hmac_hashsize = 20
 -- length in octets of pseudorandom function output, 
 -- a positive integer. (SHA1 outputs 160 bits).
 hLen :: Integer
-hLen = 160 `div` 8
+hLen = 20
 
 -- underlying pseudorandom function (hLen denotes the 
 -- length in octets of the pseudorandom function output).
 hash :: [Word8] -> [Word8]
-hash = unroll . SHA1.toInteger . SHA1.hash
+hash = padding . unroll . SHA1.toInteger . SHA1.hash
+  where
+    padding :: [Word8] -> [Word8]
+    padding xs | length xs < (fromInteger hLen) = padding (0x00 : xs)
+               | length xs > (fromInteger hLen) = error "SHA1 produced more than 160bits!"
+               | otherwise        = xs
 
 ----------------------------------------
 
 prop_hmac_key_len :: [Word8] -> Property
-prop_hmac_key_len key = len >= hmac_hashsize .&&. len <= hmac_blocksize
-  where len = length $ hmac_fitted_key key
+prop_hmac_key_len key = length (hmac_padded_key key) === hmac_blocksize
+
+prop_hash_len :: [Word8] -> Property
+prop_hash_len msg = length (hash msg) === (fromInteger hLen)
 
 --------------------------------------------------------------------------------
 -- ** Operations from above specifications.
