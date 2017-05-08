@@ -78,10 +78,10 @@ pbkdf2 pswd salt c dkLen
       r  = dkLen - (l - 1) * hLen
 
       us :: Integer -> [[Word8]]
-      us i = iterate (hmac pswd) (hmac pswd (salt ++ int i))
+      us i = take (fromInteger c) $ iterate (hmac pswd) (hmac pswd (salt ++ int i))
 
       f :: Integer -> [Word8]
-      f i = take (fromInteger c) $ foldr1 mxor (us i)
+      f i = foldr1 mxor (us i)
 
       ts :: [[Word8]]
       ts = map f [1..l]
