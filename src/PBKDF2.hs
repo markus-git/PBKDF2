@@ -78,16 +78,15 @@ pbkdf2 pswd salt c dkLen
       r  = dkLen - (l - 1) * hLen
 
       us :: Integer -> [[Word8]]
-      us i = take (fromInteger c - 1) $
-        iterate (hmac pswd) (hmac pswd (salt ++ int i))
+      us i = iterate (hmac pswd) (hmac pswd (salt ++ int i))
 
       f :: Integer -> [Word8]
-      f i = foldr1 mxor (us i)
+      f i = take (fromInteger c) $ foldr1 mxor (us i)
 
       ts :: [[Word8]]
       ts = map f [1..l]
   in
-  take (fromInteger r) (concat ts)
+  take (fromInteger r - 1) (concat ts)
 
 -- INT (i) is a four-octet encoding of the integer i,
 -- most significant octet first.
