@@ -70,37 +70,45 @@ type Password = [Word8] -- password, an octet string.
 type Salt     = [Word8] -- salt, an octet string.
 type Hash     = [Word8] -- derived key, a dkLen-octet string.
 
-pbkdf2 :: Password -> Salt -> Integer -> Integer -> Hash
+pbkdf2 :: Password -> Salt -> Int -> Int -> Hash
 pbkdf2 pswd salt c dkLen
   | dkLen > (2^32 - 1) * hLen = error "derived key too long"
   | otherwise =
   let l  = dkLen `mdiv` hLen
 
-      us :: Integer -> [[Word8]]
-      us i = take (fromInteger c)
+      us :: Int -> [[Word8]]
+      us i = take c
            $ iterate (hmac pswd)
            $ hmac pswd (salt ++ pbkdf2_int i)
 
-      f :: Integer -> [Word8]
+      f :: Int -> [Word8]
       f i = foldr1 mxor (us i)
 
       ts :: [[Word8]]
       ts = map f [1..l]
   in
-  take (fromInteger dkLen) $ concat ts
+  take dkLen $ concat ts
 
--- I have slightly modified the algorithm and skipped 'r', which is used to
+-- *** I have slightly modified the algorithm and skipped 'r', which is used to
 -- drop any extra octates from rounding in 'l'. But since these are dropped from
 -- the last block, we could just as well grab the 'dkLen' first blocks instead.
 
 -- INT (i) is a four-octet encoding of the integer i,
 -- most significant octet first.
-pbkdf2_int :: Integer -> [Word8]
+pbkdf2_int :: Int -> [Word8]
 pbkdf2_int i
   | length o > 4 = error "size of INT(i) > four-octet"
-  | length o < 4 = replicate (4 - length o) 0x00 ++ o
+  | length o < 4 = 0x00 `mrepeat` (4 - length o) ++ o
   | otherwise    = o
-  where o = unroll i
+  where o = unroll (fromIntegral i)
+
+-- length in octest of pseudorandom function input, SHA1 blocks are 512 bits.
+blocksize :: Int
+blocksize = 64
+  
+-- length in octets of pseudorandom function output, SHA1 outputs 160 bits.
+hLen :: Int
+hLen = 20
 
 --------------------------------------------------------------------------------
 -- * HMAC-SHA1.
@@ -163,49 +171,33 @@ hmac :: [Word8] -- message, an octet string.
      -> [Word8] -- encoded message, an octet string.
 hmac msg key =
   let sized_key = hmac_padded_key key
-      o_key_pad = (0x5c `mrepeat` hmac_blocksize) `mxor` sized_key
-      i_key_pad = (0x36 `mrepeat` hmac_blocksize) `mxor` sized_key
+      o_key_pad = (0x5c `mrepeat` blocksize) `mxor` sized_key
+      i_key_pad = (0x36 `mrepeat` blocksize) `mxor` sized_key
   in
   hash(o_key_pad ++ hash(i_key_pad ++ msg))
 
 hmac_padded_key :: [Word8] -> [Word8]
-hmac_padded_key key = k ++ (0x00 `mrepeat` (hmac_blocksize - length k))
-  where k | length key > hmac_blocksize = hash key
-          | otherwise                   = key
-
-hmac_blocksize :: Int
-hmac_blocksize = 64
-
-hmac_hashsize :: Int
-hmac_hashsize = 20
-  
--- length in octets of pseudorandom function output, 
--- a positive integer. (SHA1 outputs 160 bits).
-hLen :: Integer
-hLen = 20
+hmac_padded_key key = k ++ (0x00 `mrepeat` (blocksize - length k))
+  where k | length key > blocksize = hash key
+          | otherwise              = key
 
 -- underlying pseudorandom function (hLen denotes the 
 -- length in octets of the pseudorandom function output).
 hash :: [Word8] -> [Word8]
 hash = padding . unroll . SHA1.toInteger . SHA1.hash
-  where
-    padding :: [Word8] -> [Word8]
-    padding xs | length xs < (fromInteger hLen) = padding (0x00 : xs)
-               | length xs > (fromInteger hLen) = error "SHA1 produced more than 160bits!"
-               | otherwise        = xs
 
 ----------------------------------------
 
 prop_hmac_key_len :: [Word8] -> Property
-prop_hmac_key_len key = length (hmac_padded_key key) === hmac_blocksize
+prop_hmac_key_len key = length (hmac_padded_key key) === blocksize
 
 prop_hash_len :: [Word8] -> Property
-prop_hash_len msg = length (hash msg) === (fromInteger hLen)
+prop_hash_len msg = length (hash msg) === hLen
 
 --------------------------------------------------------------------------------
 -- ** Operations from above specifications.
 
-mdiv :: Integer -> Integer -> Integer
+mdiv :: Int -> Int -> Int
 mdiv a b = ceiling ((fromIntegral a) / (fromIntegral b))
 
 mxor :: [Word8] -> [Word8] -> [Word8]
@@ -227,6 +219,9 @@ roll :: [Word8] -> Integer
 roll = foldr stepL 0
   where
     stepL b a = a `shiftL` 8 .|. fromIntegral b
+
+padding :: [Word8] -> [Word8]
+padding xs = 0x00 `mrepeat` (length xs - hLen) ++ xs
 
 ----------------------------------------
 
