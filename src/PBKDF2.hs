@@ -18,8 +18,9 @@ import Numeric
 
 -- for testing.
 import Debug.Trace
-import Test.QuickCheck
-import qualified Data.HMAC as HMAC (hmac_sha1)
+import Test.QuickCheck (quickCheck, Property)
+import qualified Test.QuickCheck as Q
+import qualified Data.HMAC       as HMAC (hmac_sha1)
 
 --------------------------------------------------------------------------------
 -- * PBKDF2.
@@ -70,6 +71,9 @@ type Password = [Word8] -- password, an octet string.
 type Salt     = [Word8] -- salt, an octet string.
 type Hash     = [Word8] -- derived key, a dkLen-octet string.
 
+-- *** I have slightly modified the algorithm and skipped 'r', which is used to
+-- drop any extra octates from rounding in 'l'. But since these are dropped from
+-- the last block, we could just as well grab the 'dkLen' first blocks instead.
 pbkdf2 :: Password -> Salt -> Int -> Int -> Hash
 pbkdf2 pswd salt c dkLen
   | dkLen > (2^32 - 1) * hLen = error "derived key too long"
@@ -88,10 +92,6 @@ pbkdf2 pswd salt c dkLen
       ts = map f [1..l]
   in
   take dkLen $ concat ts
-
--- *** I have slightly modified the algorithm and skipped 'r', which is used to
--- drop any extra octates from rounding in 'l'. But since these are dropped from
--- the last block, we could just as well grab the 'dkLen' first blocks instead.
 
 -- INT (i) is a four-octet encoding of the integer i,
 -- most significant octet first.
@@ -181,21 +181,87 @@ hmac_padded_key key = k ++ (0x00 `mrepeat` (blocksize - length k))
   where k | length key > blocksize = hash key
           | otherwise              = key
 
+----------------------------------------
+
+prop_hmac_key_len :: [Word8] -> Property
+prop_hmac_key_len key = length (hmac_padded_key key) Q.=== blocksize
+
+--------------------------------------------------------------------------------
+-- * SHA1
+--
+-- ...
+--
+--------------------------------------------------------------------------------
+
+data Block = H !Word32 !Word32 !Word32 !Word32 !Word32
+
+sha1 :: [Word8] -> [Word8]
+sha1 msg =
+  let pre    = sha1_pad msg
+      blocks = sha1_chunk 64 pre
+
+      hhs :: [Word8] -> Block -> Block
+      hhs b = undefined
+  in
+  undefined
+
+sha1_init :: Block
+sha1_init = H 0x67452301 0xefcdab89 0x98badcfe 0x10325476 0xc3d2e1f0
+
+-- *** len will always be a multiple of eight, which lets me pad the 
+--     the message with bytes rather than bits.
+sha1_pad :: [Word8] -> [Word8]
+sha1_pad msg = 
+  let one  = msg ++ [0x80]
+      len  = length one `mod` 64
+      pad  = if len > 56 then 56 + (64 - len) else 56 - len
+      zero = one ++ (0x00 `mrepeat` pad)
+  in
+  zero ++ sha1_int (mbits msg)
+
+sha1_int :: Int -> [Word8]
+sha1_int i
+  | length o > 8 = error "size of INT(i) > eight-octet"
+  | length o < 8 = 0x00 `mrepeat` (8 - length o) ++ o
+  | otherwise    = o
+  where o = unroll (fromIntegral i)
+
+sha1_chunk :: Int -> [Word8] -> [[Word8]]
+sha1_chunk words [] = []
+sha1_chunk words xs = let (h,t) = splitAt words xs in h : sha1_chunk words t
+
+sha1_f :: Int -> Word32 -> Word32 -> Word32 -> Word32
+sha1_f t b c d
+  | 0  <= t && t <= 19 = (b .&. c) .|. ((complement b) .&. d)
+  | 20 <= t && t <= 39 = b `xor` c `xor` d
+  | 40 <= t && t <= 59 = (b .&. c) .|. (b .&. d) .|. (c .&. d)
+  | 60 <= t && t <= 79 = b `xor` c `xor` d
+
+sha1_k :: Int -> Word32
+sha1_k t
+  | 0  <= t && t <= 19 = 0x5a827999
+  | 20 <= t && t <= 39 = 0x6ed9eba1
+  | 40 <= t && t <= 59 = 0x8f1bbcdc
+  | 60 <= t && t <= 79 = 0xca62c1d6
+
 -- underlying pseudorandom function (hLen denotes the 
 -- length in octets of the pseudorandom function output).
 hash :: [Word8] -> [Word8]
 hash = padding . unroll . SHA1.toInteger . SHA1.hash
+  where
+    padding :: [Word8] -> [Word8]
+    padding xs = 0x00 `mrepeat` (length xs - hLen) ++ xs
 
 ----------------------------------------
 
-prop_hmac_key_len :: [Word8] -> Property
-prop_hmac_key_len key = length (hmac_padded_key key) === blocksize
-
 prop_hash_len :: [Word8] -> Property
-prop_hash_len msg = length (hash msg) === hLen
+prop_hash_len msg = length (hash msg) Q.=== hLen
 
 --------------------------------------------------------------------------------
 -- ** Operations from above specifications.
+
+mbits :: [Word8] -> Int
+mbits = (8*) . length
 
 mdiv :: Int -> Int -> Int
 mdiv a b = ceiling ((fromIntegral a) / (fromIntegral b))
@@ -220,13 +286,10 @@ roll = foldr stepL 0
   where
     stepL b a = a `shiftL` 8 .|. fromIntegral b
 
-padding :: [Word8] -> [Word8]
-padding xs = 0x00 `mrepeat` (length xs - hLen) ++ xs
-
 ----------------------------------------
 
 prop_octets_id :: Integer -> Property
-prop_octets_id i = i >= 0 ==> roll (unroll i) === i
+prop_octets_id i = i >= 0 Q.==> roll (unroll i) Q.=== i
 
 --------------------------------------------------------------------------------
 -- ** Testing & QuickCheck.
