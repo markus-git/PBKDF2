@@ -72,8 +72,9 @@ type Salt     = [Word8] -- salt, an octet string.
 type Hash     = [Word8] -- derived key, a dkLen-octet string.
 
 -- *** I have slightly modified the algorithm and skipped 'r', which is used to
--- drop any extra octates from rounding in 'l'. But since these are dropped from
--- the last block, we could just as well grab the 'dkLen' first blocks instead.
+-- drop any extra blocks introduced by rounding 'l'. Since these are dropped
+-- from the last blocks, we could just as well grab the 'dkLen' first blocks
+-- instead. This is under the assumption that 'dkLen' is a multiple of 8.
 pbkdf2 :: Password -> Salt -> Int -> Int -> Hash
 pbkdf2 pswd salt c dkLen
   | dkLen > (2^32 - 1) * hLen = error "derived key too long"
@@ -83,7 +84,7 @@ pbkdf2 pswd salt c dkLen
       us :: Int -> [[Word8]]
       us i = take c
            $ iterate (hmac pswd)
-           $ hmac pswd (salt ++ pbkdf2_int i)
+           $ hmac pswd (salt ++ int4b i)
 
       f :: Int -> [Word8]
       f i = foldr1 mxor (us i)
@@ -92,15 +93,6 @@ pbkdf2 pswd salt c dkLen
       ts = map f [1..l]
   in
   take dkLen $ concat ts
-
--- INT (i) is a four-octet encoding of the integer i,
--- most significant octet first.
-pbkdf2_int :: Int -> [Word8]
-pbkdf2_int i
-  | length o > 4 = error "size of INT(i) > four-octet"
-  | length o < 4 = 0x00 `mrepeat` (4 - length o) ++ o
-  | otherwise    = o
-  where o = unroll (fromIntegral i)
 
 -- length in octest of pseudorandom function input, SHA1 blocks are 512 bits.
 blocksize :: Int
@@ -174,11 +166,11 @@ hmac msg key =
       o_key_pad = (0x5c `mrepeat` blocksize) `mxor` sized_key
       i_key_pad = (0x36 `mrepeat` blocksize) `mxor` sized_key
   in
-  hash(o_key_pad ++ hash(i_key_pad ++ msg))
+  sha1(o_key_pad ++ sha1(i_key_pad ++ msg))
 
 hmac_padded_key :: [Word8] -> [Word8]
 hmac_padded_key key = k ++ (0x00 `mrepeat` (blocksize - length k))
-  where k | length key > blocksize = hash key
+  where k | length key > blocksize = sha1 key
           | otherwise              = key
 
 ----------------------------------------
@@ -195,57 +187,89 @@ prop_hmac_key_len key = length (hmac_padded_key key) Q.=== blocksize
 
 data Block = H !Word32 !Word32 !Word32 !Word32 !Word32
 
+-- underlying pseudorandom function (hLen denotes the length in octets of the
+-- pseudorandom function output).
 sha1 :: [Word8] -> [Word8]
 sha1 msg =
-  let pre    = sha1_pad msg
-      blocks = sha1_chunk 64 pre
+  let f :: Int -> Word32 -> Word32 -> Word32 -> Word32
+      f t b c d
+        | 0  <= t && t <= 19 = (b .&. c) .|. ((complement b) .&. d)
+        | 20 <= t && t <= 39 = b `xor` c `xor` d
+        | 40 <= t && t <= 59 = (b .&. c) .|. (b .&. d) .|. (c .&. d)
+        | 60 <= t && t <= 79 = b `xor` c `xor` d
 
-      hhs :: [Word8] -> Block -> Block
-      hhs b = undefined
+      k :: Int -> Word32
+      k t
+        | 0  <= t && t <= 19 = 0x5a827999
+        | 20 <= t && t <= 39 = 0x6ed9eba1
+        | 40 <= t && t <= 59 = 0x8f1bbcdc
+        | 60 <= t && t <= 79 = 0xca62c1d6
+
+      step :: [Word32] -> Int -> Block -> Block
+      step w i (H a b c d e) = (H t a (b `rotateL` 30) c d)
+        where
+          fi = f i b c d
+          ki = k i
+          t  = (a `rotateL` 5) + fi + e + ki + (w !! i)        
+
+      block :: [Word32] -> Block -> Block
+      block ws ib = foldl (\b i -> step ws i b) ib [0..79]
+
+      process :: [[Word32]] -> Block -> Block
+      process ws ib = foldl (\b w -> block w b) ib ws
+
+      words :: Block -> [Word8]
+      words (H a b c d e) = padding $ unroll $
+          (fromIntegral a `shiftL` 128) +
+          (fromIntegral b `shiftL` 96)  +
+          (fromIntegral c `shiftL` 64)  +
+          (fromIntegral d `shiftL` 32)  +
+          (fromIntegral e)
+        where
+          padding :: [Word8] -> [Word8]
+          padding xs = 0x00 `mrepeat` (length xs - hLen) ++ xs
   in
-  undefined
+  words $ process (sha1_preprocess msg) (sha1_init)
 
+-- ...
 sha1_init :: Block
 sha1_init = H 0x67452301 0xefcdab89 0x98badcfe 0x10325476 0xc3d2e1f0
 
--- *** len will always be a multiple of eight, which lets me pad the 
---     the message with bytes rather than bits.
-sha1_pad :: [Word8] -> [Word8]
-sha1_pad msg = 
-  let one  = msg ++ [0x80]
-      len  = length one `mod` 64
-      pad  = if len > 56 then 56 + (64 - len) else 56 - len
-      zero = one ++ (0x00 `mrepeat` pad)
-  in
-  zero ++ sha1_int (mbits msg)
+-- ...
+sha1_padding :: [Word8] -> [Word8]
+sha1_padding msg =
+    msg ++ [0x80] ++ (0x00 `mrepeat` padding) ++ int8b (mbits msg)
+  where
+    blocks :: Int
+    blocks = (length msg + 1) `mod` 64
+    
+    padding :: Int
+    padding = if (blocks > 56) then (56 + 64 - blocks) else (56 - blocks)  
 
-sha1_int :: Int -> [Word8]
-sha1_int i
-  | length o > 8 = error "size of INT(i) > eight-octet"
-  | length o < 8 = 0x00 `mrepeat` (8 - length o) ++ o
-  | otherwise    = o
-  where o = unroll (fromIntegral i)
+-- A message is processed in successive 512-bit chunks, where each chunk is
+-- is broken into sixteen 32-bit big-endian words and then exdented into
+-- eighty 32-bit words according to:
+--
+--    for i from 16 to 79
+--      w[i] = (w[i-3] xor w[i-8] xor w[i-14] xor w[i-16]) leftrotate 1
+-- 
+sha1_preprocess :: [Word8] -> [[Word32]]
+sha1_preprocess = map (extend . map b2w . mchunk 4) . mchunk 64 . sha1_padding
+  where
+    word :: [Word32] -> Int -> Word32
+    word w i =
+     (       (w !! (i-3))
+       `xor` (w !! (i-8))
+       `xor` (w !! (i-14))
+       `xor` (w !! (i-16))
+     )
+     `rotateL` 1
 
-sha1_chunk :: Int -> [Word8] -> [[Word8]]
-sha1_chunk words [] = []
-sha1_chunk words xs = let (h,t) = splitAt words xs in h : sha1_chunk words t
+    extend :: [Word32] -> [Word32]
+    extend ws = foldl (\w i -> w ++ [word w i]) ws [16..79]
 
-sha1_f :: Int -> Word32 -> Word32 -> Word32 -> Word32
-sha1_f t b c d
-  | 0  <= t && t <= 19 = (b .&. c) .|. ((complement b) .&. d)
-  | 20 <= t && t <= 39 = b `xor` c `xor` d
-  | 40 <= t && t <= 59 = (b .&. c) .|. (b .&. d) .|. (c .&. d)
-  | 60 <= t && t <= 79 = b `xor` c `xor` d
+----------------------------------------
 
-sha1_k :: Int -> Word32
-sha1_k t
-  | 0  <= t && t <= 19 = 0x5a827999
-  | 20 <= t && t <= 39 = 0x6ed9eba1
-  | 40 <= t && t <= 59 = 0x8f1bbcdc
-  | 60 <= t && t <= 79 = 0xca62c1d6
-
--- underlying pseudorandom function (hLen denotes the 
--- length in octets of the pseudorandom function output).
 hash :: [Word8] -> [Word8]
 hash = padding . unroll . SHA1.toInteger . SHA1.hash
   where
@@ -253,6 +277,9 @@ hash = padding . unroll . SHA1.toInteger . SHA1.hash
     padding xs = 0x00 `mrepeat` (length xs - hLen) ++ xs
 
 ----------------------------------------
+
+prop_hash_eq :: [Word8] -> Property
+prop_hash_eq msg = length msg > 0 Q.==> sha1 msg Q.=== hash msg
 
 prop_hash_len :: [Word8] -> Property
 prop_hash_len msg = length (hash msg) Q.=== hLen
@@ -272,8 +299,28 @@ mxor = zipWith (xor)
 mrepeat :: Word8 -> Int -> [Word8]
 mrepeat = flip replicate
 
+mchunk :: Int -> [a] -> [[a]]
+mchunk s [] = []
+mchunk s xs = let (h,t) = splitAt s xs in h : mchunk s t
+
+----------------------------------------
+
+int8b :: Int -> [Word8]
+int8b i = mint i 8
+
+int4b :: Int -> [Word8]
+int4b i = mint i 4
+
+-- INT i b is a b-octet encoding of the integer i, most significant octet first.
+mint :: Int -> Int -> [Word8]
+mint num bytes
+  | length o > bytes = error "INT(i): size too big."
+  | length o < bytes = (0x00 `mrepeat` (bytes - length o)) ++ o
+  | otherwise        = o
+  where o = unroll (fromIntegral num)
+
 --------------------------------------------------------------------------------
--- ** Conversion from words to integers.
+-- ** Conversion between word and integer types.
 
 unroll :: Integer -> [Word8]
 unroll = unfoldr stepR
@@ -285,6 +332,11 @@ roll :: [Word8] -> Integer
 roll = foldr stepL 0
   where
     stepL b a = a `shiftL` 8 .|. fromIntegral b
+
+----------------------------------------
+
+b2w :: [Word8] -> Word32
+b2w = fromIntegral . roll
 
 ----------------------------------------
 

@@ -36,7 +36,6 @@ for each chunk
     d = h3
     e = h4
 
-    Main loop:[3][53]
     for i from 0 to 79
         if 0 ≤ i ≤ 19 then
             f = (b and c) or ((not b) and d)
