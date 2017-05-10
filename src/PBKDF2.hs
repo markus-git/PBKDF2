@@ -140,22 +140,6 @@ hLen = 20
 --  (7) apply H to the stream generated in step (6) and output
 --      the result
 --
--- Pseudocode specification for HMAC-SHA1:
---
---  function hmac (key, message) {
---    if (length(key) > blocksize) {
---        key = hash(key)
---    }
---    if (length(key) < blocksize) {
---        key = key ∥ [0x00 * (blocksize - length(key))]
---    }
---    o_key_pad = [0x5c * blocksize] ⊕ key
---    i_key_pad = [0x36 * blocksize] ⊕ key
---
---    return hash(o_key_pad ∥ hash(i_key_pad ∥ message))
---  }
---
--- Where '*' denotes repetition.
 --------------------------------------------------------------------------------
 
 hmac :: [Word8] -- message, an octet string.
@@ -210,12 +194,9 @@ sha1 msg =
         | 60 <= t && t <= 79 = 0xca62c1d6
 
       step :: [Word32] -> Int -> Block -> Block
-      step w i (H a b c d e) = (H temp a (b `rotateL` 30) c d)
+      step w t (H a b c d e) = (H temp a (b `rotateL` 30) c d)
         where
-          fi   = f i b c d
-          ki   = k i
-          wi   = w !! i
-          temp = (a `rotateL` 5) + fi + e + ki + wi
+          temp = (a `rotateL` 5) + (f t b c d) + e + (w !! t) + (k t)
 
       block :: [Word32] -> Block -> Block
       block ws ib = foldl (\b i -> step ws i b) ib [0..79]
@@ -279,7 +260,7 @@ prop_sha1_padding_len :: [Word8] -> Property
 prop_sha1_padding_len msg = length (sha1_padding msg) `mod` 64 Q.=== 0
 
 prop_sha1_preprocess_len :: [Word8] -> Property
-prop_sha1_preprocess_len msg = undefined
+prop_sha1_preprocess_len msg = error "todo"
 
 --------------------------------------------------------------------------------
 -- ** Operations from above specifications.
