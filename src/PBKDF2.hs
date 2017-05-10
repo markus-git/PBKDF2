@@ -187,6 +187,10 @@ prop_hmac_key_len key = length (hmac_padded_key key) Q.=== blocksize
 
 data Block = H !Word32 !Word32 !Word32 !Word32 !Word32
 
+addBlock :: Block -> Block -> Block
+addBlock (H a1 b1 c1 d1 e1) (H a2 b2 c2 d2 e2) =
+  H (a1+a2) (b1+b2) (c1+c2) (d1+d2) (e1+e2)
+
 -- underlying pseudorandom function (hLen denotes the length in octets of the
 -- pseudorandom function output).
 sha1 :: [Word8] -> [Word8]
@@ -206,17 +210,18 @@ sha1 msg =
         | 60 <= t && t <= 79 = 0xca62c1d6
 
       step :: [Word32] -> Int -> Block -> Block
-      step w i (H a b c d e) = (H t a (b `rotateL` 30) c d)
+      step w i (H a b c d e) = (H temp a (b `rotateL` 30) c d)
         where
-          fi = f i b c d
-          ki = k i
-          t  = (a `rotateL` 5) + fi + e + ki + (w !! i)        
+          fi   = f i b c d
+          ki   = k i
+          wi   = w !! i
+          temp = (a `rotateL` 5) + fi + e + ki + wi
 
       block :: [Word32] -> Block -> Block
       block ws ib = foldl (\b i -> step ws i b) ib [0..79]
 
       process :: [[Word32]] -> Block -> Block
-      process ws ib = foldl (\b w -> block w b) ib ws
+      process ws ib = foldl (\b w -> b `addBlock` block w b) ib ws
 
       words :: Block -> [Word8]
       words (H a b c d e) = padding $ unroll $
@@ -270,19 +275,11 @@ sha1_preprocess = map (extend . map b2w . mchunk 4) . mchunk 64 . sha1_padding
 
 ----------------------------------------
 
-hash :: [Word8] -> [Word8]
-hash = padding . unroll . SHA1.toInteger . SHA1.hash
-  where
-    padding :: [Word8] -> [Word8]
-    padding xs = 0x00 `mrepeat` (length xs - hLen) ++ xs
+prop_sha1_padding_len :: [Word8] -> Property
+prop_sha1_padding_len msg = length (sha1_padding msg) `mod` 64 Q.=== 0
 
-----------------------------------------
-
-prop_hash_eq :: [Word8] -> Property
-prop_hash_eq msg = length msg > 0 Q.==> sha1 msg Q.=== hash msg
-
-prop_hash_len :: [Word8] -> Property
-prop_hash_len msg = length (hash msg) Q.=== hLen
+prop_sha1_preprocess_len :: [Word8] -> Property
+prop_sha1_preprocess_len msg = undefined
 
 --------------------------------------------------------------------------------
 -- ** Operations from above specifications.
@@ -354,6 +351,14 @@ wpa2 pswd salt = pbkdf2 pswd salt 4096 256
 msg = S.encode "The quick brown fox jumps over the lazy dog"
 key = S.encode "key"             
 res = 0xde7c9b85b8b78aa6bc8a7a36f70a90701c9db4d9 :: Integer
+
+----------------------------------------
+
+hash :: [Word8] -> [Word8]
+hash = padding . unroll . SHA1.toInteger . SHA1.hash
+  where
+    padding :: [Word8] -> [Word8]
+    padding xs = 0x00 `mrepeat` (length xs - hLen) ++ xs
 
 --------------------------------------------------------------------------------
 -- the end.
