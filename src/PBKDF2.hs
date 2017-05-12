@@ -5,22 +5,16 @@ import Data.Word
 import Data.Char (ord)
 import Data.List (unfoldr, intersperse)
 
--- underlying psuedo-random function.
-import qualified Data.Digest.SHA1 as SHA1
-
 -- for converting between words of different size and other numbers.
---import qualified Data.ByteString.Lazy     as L
---import qualified Data.ByteString.Char8    as C
---import qualified Data.ByteString.Internal as I
 import qualified Codec.Binary.UTF8.String as S
---import qualified Data.Serialize as S
 import Numeric
 
 -- for testing.
 import Debug.Trace
 import Test.QuickCheck (quickCheck, Property)
-import qualified Test.QuickCheck as Q
-import qualified Data.HMAC       as HMAC (hmac_sha1)
+import qualified Test.QuickCheck  as Q
+import qualified Data.HMAC        as HMAC (hmac_sha1)
+import qualified Data.Digest.SHA1 as SHA1
 
 --------------------------------------------------------------------------------
 -- * PBKDF2.
