@@ -50,7 +50,6 @@ sha1_padding msg =
      p :: SArr  Word8 <- newArr (value 64)
      let len  = length msg     :: SExp Word8
          pad  = 56 - (len + 1) :: SExp Word8
-         bits = i2n (len * 8)  :: SExp Word64
      -- copy message.
      for 0 (len - 1) $ \i ->
        setArr p i (m ! i)
@@ -60,6 +59,7 @@ sha1_padding msg =
      for (len + 1) 56 $ \i ->
        setArr p i 0
      -- add msg length in bits.
+     bits <- shareM (i2n (len * 8) :: SExp Word64)
      for 57 64 $ \i ->
        let ix = i2n (7 - (i - 57))   :: SExp Word32
            b8 = bits `shiftR` (8*ix) :: SExp Word64
