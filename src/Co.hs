@@ -18,7 +18,7 @@ import Feldspar.Hardware hiding (Word)
 import qualified Feldspar.Software.Compile as Soft
 import qualified Feldspar.Hardware.Compile as Hard
 
-import Prelude (flip, undefined, Num(..), ($), (.))
+import Prelude (error, undefined, Num(..), Integral, ($), (.))
 import qualified Prelude as P
 
 --------------------------------------------------------------------------------
@@ -71,7 +71,7 @@ soft_sha1 message =
               setRef ra (temp)
 
      -- format the message according to SHA1.
-     w  <- soft_sha1_extend message
+     w  <- sha1_extend message
      -- fetch the initial 160-bit block.
      ib <- init_block
      -- process the first (and only!) block of w.
@@ -100,49 +100,6 @@ foldlSM f b l u =
 (!!) :: SIrr SWord32 -> SWord8 -> SWord32
 (!!) = (!)
 
-----------------------------------------
-
-soft_sha1_pad :: SArr SWord8 -> Software (SArr SWord8)
-soft_sha1_pad message =
-  do let len = length message
-     bits <- shareM (i2n len * 8 :: SWord64)
-     pad  <- newArr 64
-     -- copy original message.
-     copyArr pad message
-     -- add the single one.
-     setArr  pad len 1
-     -- fill with zeroes.
-     for (len + 1) (55) $ \i -> setArr pad i 0
-     -- add length in last 8 8-bits.
-     for (56) (63) $ \i ->
-       let shift = (8 * (63 - (i2n i))) :: SWord32
-       in  setArr pad i (i2n (bits `shiftR` shift))
-     return pad
-
-soft_sha1_extend :: SArr SWord8 -> Software (SIrr SWord32)
-soft_sha1_extend message =
-  do pad    :: SArr SWord8  <- soft_sha1_pad message
-     ex     :: SArr SWord32 <- newArr 80
-     -- truncate original block.
-     ipad   :: SIrr SWord8  <- unsafeFreezeArr pad
-     for 0 15 (\(i :: SExp Word8) ->
-       setArr ex i
-         (   (i2n $ ipad ! (i*4  ))
-           + (i2n $ ipad ! (i*4+1)) `shiftL` (8  :: SWord32)
-           + (i2n $ ipad ! (i*4+2)) `shiftL` (16 :: SWord32)
-           + (i2n $ ipad ! (i*4+3)) `shiftL` (24 :: SWord32)
-         ))
-     -- extend block with new words.
-     iex   :: SIrr SWord32 <- unsafeFreezeArr ex
-     for 16 79 (\(i :: SWord8) ->
-       setArr ex i $ flip rotateL (1 :: SWord32)
-         (       (iex ! (i-3 ))
-           `xor` (iex ! (i-8 ))
-           `xor` (iex ! (i-14))
-           `xor` (iex ! (i-16))
-         ))
-     unsafeFreezeArr ex
-
 --------------------------------------------------------------------------------
 -- * Hardware
 --------------------------------------------------------------------------------
@@ -167,11 +124,120 @@ type HB     = B     Hardware
 -- ...
 
 --------------------------------------------------------------------------------
-
-
-
---------------------------------------------------------------------------------
 -- * Generic stuff.
+--------------------------------------------------------------------------------
+-- *** todo: i2n introduced a number of extra type constraints that I've yet to
+--           hide. Most should be fixable though, as they can be derived from
+--           'SyntaxM' instead ('SyntaxM m ... => PredicateOf (DomainOf m) ...'
+--           and so on).
+
+sha1_pad
+  :: forall m
+   . ( Comp m
+     , SyntaxM m (Expr m Word8)
+     , SyntaxM m (Expr m Word32)
+     , SyntaxM m (Expr m Word64)
+     , SyntaxM m (Ix m)
+     -- expressions.
+     , Bitwise (DomainOf m)
+     , Casting (DomainOf m)
+     , Finite (Ix m) (Array m (Expr m Word8))
+     -- hmm... would be nice to merge these.
+     , Num (Expr m Word8)
+     , Num (Expr m Word32)
+     , Num (Expr m Word64)
+     , Num (Ix m)
+     -- hmm...
+     , Integral (Internal (Ix m))
+     , Domain (Ix m) ~ DomainOf m
+     , PredicateOf (DomainOf m) Word8
+     , PredicateOf (DomainOf m) Word32
+     , PredicateOf (DomainOf m) Word64
+     , PredicateOf (DomainOf m) (Internal (Ix m))
+     , Internal (Expr m Word8)  ~ Word8
+     , Internal (Expr m Word32) ~ Word32
+     , Internal (Expr m Word64) ~ Word64
+     )
+  => Array m (Expr m Word8)
+  -> m (Array m (Expr m Word8))
+sha1_pad message =
+  do let len = length message
+     bits <- shareM (i2n len * 8 :: Expr m Word64)
+     pad  <- newArr 64
+     -- copy original message.
+     copyArr pad message
+     -- add the single one.
+     setArr  pad len 1
+     -- fill with zeroes.
+     for (len + 1) (55) $ \i -> setArr pad i 0
+     -- add length in last 8 8-bits.
+     for (56) (63) $ \i ->
+       let shift = (8 * (63 - (i2n i))) :: Expr m Word32
+       in  setArr pad i (i2n (bits `shiftR` shift))
+     return pad
+
+sha1_extend
+  :: forall m
+   . ( Comp m
+     , SyntaxM m (Expr m Word8)
+     , SyntaxM m (Expr m Word32)
+     , SyntaxM m (Expr m Word64)
+     , SyntaxM m (Ix m)
+     , SyntaxM m (Elem (IArray m (Expr m Word8)))
+     -- expressions.
+     , Bitwise (DomainOf m)
+     , Casting (DomainOf m)
+     , Elem (IArray m (Expr m Word32)) ~ Expr m Word32
+     -- would be nice to merge these.
+     --   Num a => Num (Expr m a)
+     --   ...
+     , Num (Expr m Word8)
+     , Num (Expr m Word32)
+     , Num (Expr m Word64)
+     , Num (Ix m)
+     , Finite (Ix m) (Array m (Expr m Word8))
+     , Finite (Ix m) (Array m (Expr m Word32))
+     , Indexed (DomainOf m) (Expr m Word8) (IArray m (Expr m Word8))
+     , Indexed (DomainOf m) (Expr m Word8) (IArray m (Expr m Word32))
+     -- hmm...
+     , Ix m ~ Expr m Word8
+     , Domain (Elem (IArray m (Expr m Word8))) ~ DomainOf m
+     , Integral (Internal (Elem (IArray m (Expr m Word8))))
+     -- hmm...
+     , PredicateOf (DomainOf m) Word8
+     , PredicateOf (DomainOf m) Word32
+     , PredicateOf (DomainOf m) Word64
+     , PredicateOf (DomainOf m) (Internal (Ix m))
+     , PredicateOf (DomainOf m) (Internal (Elem (IArray m (Expr m Word8))))
+     , Internal (Expr m Word8)  ~ Word8
+     , Internal (Expr m Word32) ~ Word32
+     , Internal (Expr m Word64) ~ Word64
+     )
+  => Array m (Expr m Word8) -> m (IArray m (Expr m Word32))
+sha1_extend message =
+  do pad    :: Array m (Expr m Word8)  <- sha1_pad message
+     ex     :: Array m (Expr m Word32) <- newArr 80
+     -- truncate original block.
+     ipad   :: IArray m (Expr m Word8) <- unsafeFreezeArr pad
+     for 0 15 (\(i :: Expr m Word8) ->
+       setArr ex i
+         (   (i2n $ ipad ! (i*4  ))
+           + (i2n $ ipad ! (i*4+1)) `shiftL` (8  :: Expr m Word32)
+           + (i2n $ ipad ! (i*4+2)) `shiftL` (16 :: Expr m Word32)
+           + (i2n $ ipad ! (i*4+3)) `shiftL` (24 :: Expr m Word32)
+         ))
+     -- extend block with new words.
+     iex   :: IArray m (Expr m Word32) <- unsafeFreezeArr ex
+     for 16 79 (\(i :: Expr m Word8) ->
+       setArr ex i $ P.flip rotateL (1 :: Expr m Word32)
+         (       (iex ! (i-3 ))
+           `xor` (iex ! (i-8 ))
+           `xor` (iex ! (i-14))
+           `xor` (iex ! (i-16))
+         ))
+     unsafeFreezeArr ex
+
+
 --------------------------------------------------------------------------------
 
 -- A block reperesents the 160-bit blocks that SHA1 operates over.
