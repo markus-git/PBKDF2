@@ -41,7 +41,8 @@ type SBlock = Block Software
 type SB     = B     Software
 
 --------------------------------------------------------------------------------
--- *** For simplicity, assume SHA1 only ever reveieves <55 octets to hash.
+-- *** todo: for simplicity we have assumed that SHA1 only ever reveieves <55
+--           octets to hash, and thus only needs one 512-bit block.
 
 soft_sha1 :: SArr SWord8 -> Software (SArr SWord8)
 soft_sha1 message =
@@ -81,6 +82,12 @@ soft_sha1 message =
      fb <- add_block ib cb
      -- translate the final block into an array of octets.
      arr_block fb
+  where
+    (??) :: SBool -> SWord32 -> SWord32 -> SWord32
+    (??) = (?)
+
+    (!!) :: SIrr SWord32 -> SWord8 -> SWord32
+    (!!) = (!)
 
 ----------------------------------------
 
@@ -93,12 +100,6 @@ foldlSM
 foldlSM f b l u =
   do for l u (\ix -> f b ix)
      return b
-
-(??) :: SBool -> SWord32 -> SWord32 -> SWord32
-(??) = (?)
-
-(!!) :: SIrr SWord32 -> SWord8 -> SWord32
-(!!) = (!)
 
 --------------------------------------------------------------------------------
 -- * Hardware
@@ -120,8 +121,64 @@ type HBlock = Block Hardware
 type HB     = B     Hardware
 
 --------------------------------------------------------------------------------
+-- *** todo: same assumption as for the software variant.
 
--- ...
+hard_sha1 :: HArr HWord8 -> Hardware (HArr HWord8)
+hard_sha1 message =
+  do let f :: HWord8 -> HWord32 -> HWord32 -> HWord32 -> HWord32
+         f t b c d =
+           (0  <= t && t <= 19) ?? ((b .&. c) .|. (complement b .&. d)) $
+           (20 <= t && t <= 39) ?? (b `xor` c `xor` d) $
+           (40 <= t && t <= 59) ?? ((b .&. c) .|. (b .&. d) .|. (c .&. d))
+                                 $ (b `xor` c `xor` d)
+
+     let k :: HWord8 -> HWord32
+         k t =
+           (0  <= t && t <= 19) ?? 0x5a827999 $
+           (20 <= t && t <= 39) ?? 0x6ed9eba1 $
+           (40 <= t && t <= 59) ?? 0x8f1bbcdc
+                                 $ 0xca62c1d6
+
+     let step :: HIrr HWord32 -> HWord8 -> HBlock -> Hardware ()
+         step w t block@(ra, rb, rc, rd, re) =
+           do (a, b, c, d, e) <- freeze_block block
+              temp <- shareM $
+                a `rotateL` (5 :: HWord32) + (f t b c d) + e + (w !! t) + (k t)
+              setRef re (d)
+              setRef rd (c)
+              setRef rc (b `rotateL` (30 :: HWord32))
+              setRef rb (a)
+              setRef ra (temp)
+
+          -- format the message according to SHA1.
+     w  <- sha1_extend message
+     -- fetch the initial 160-bit block.
+     ib <- init_block
+     -- process the first (and only!) block of w.
+     cb <- copy_block ib
+     foldlHM (\b ix -> step w ix b) cb 0 79
+     -- add new block to previous block.
+     fb <- add_block ib cb
+     -- translate the final block into an array of octets.
+     arr_block fb
+  where
+    (??) :: HBool -> HWord32 -> HWord32 -> HWord32
+    (??) = (?)
+
+    (!!) :: HIrr HWord32 -> HWord8 -> HWord32
+    (!!) = (!)
+
+----------------------------------------
+
+foldlHM
+  :: (HBlock -> HWord8 -> Hardware ()) -- update function.
+  -> HBlock -- initial block.
+  -> HWord8 -- lower range.
+  -> HWord8 -- upper range.
+  -> Hardware HBlock
+foldlHM f b l u =
+  do for l u (\ix -> f b ix)
+     return b
 
 --------------------------------------------------------------------------------
 -- * Generic stuff.
