@@ -22,7 +22,8 @@ import Prelude (flip, undefined, Num(..), ($), (.))
 import qualified Prelude as P
 
 --------------------------------------------------------------------------------
--- Short-hands.
+-- * Software
+--------------------------------------------------------------------------------
 
 type SRef    = Reference Software
 
@@ -36,17 +37,14 @@ type SWord16 = SExp Word16
 type SWord32 = SExp Word32
 type SWord64 = SExp Word64
 
---------------------------------------------------------------------------------
--- * SHA1
---
--- ...
---
--- *** For simplicity, lets assume we only reveieve <55 8-bits to hash,
---     that is, SHA1 pre-processing will only create one block.
---------------------------------------------------------------------------------
+type SBlock = Block Software
+type SB     = B     Software
 
-sha1 :: SArr SWord8 -> Software (SArr SWord8)
-sha1 message =
+--------------------------------------------------------------------------------
+-- *** For simplicity, assume SHA1 only ever reveieves <55 octets to hash.
+
+soft_sha1 :: SArr SWord8 -> Software (SArr SWord8)
+soft_sha1 message =
   do let f :: SWord8 -> SWord32 -> SWord32 -> SWord32 -> SWord32
          f t b c d =
            (0  <= t && t <= 19) ?? ((b .&. c) .|. (complement b .&. d)) $
@@ -61,7 +59,7 @@ sha1 message =
            (40 <= t && t <= 59) ?? 0x8f1bbcdc
                                  $ 0xca62c1d6
 
-     let step :: SIrr SWord32 -> SWord8 -> Block -> Software ()
+     let step :: SIrr SWord32 -> SWord8 -> SBlock -> Software ()
          step w t block@(ra, rb, rc, rd, re) =
            do (a, b, c, d, e) <- freeze_block block
               temp <- shareM $
@@ -73,12 +71,12 @@ sha1 message =
               setRef ra (temp)
 
      -- format the message according to SHA1.
-     w  <- sha1_extend message
+     w  <- soft_sha1_extend message
      -- fetch the initial 160-bit block.
      ib <- init_block
      -- process the first (and only!) block of w.
      cb <- copy_block ib
-     foldlM (\b ix -> step w ix b) cb 0 79
+     foldlSM (\b ix -> step w ix b) cb 0 79
      -- add new block to previous block.
      fb <- add_block ib cb
      -- translate the final block into an array of octets.
@@ -86,13 +84,13 @@ sha1 message =
 
 ----------------------------------------
 
-foldlM
-  :: (Block -> SWord8 -> Software ()) -- update function.
-  -> Block  -- initial block.
+foldlSM
+  :: (SBlock -> SWord8 -> Software ()) -- update function.
+  -> SBlock -- initial block.
   -> SWord8 -- lower range.
   -> SWord8 -- upper range.
-  -> Software Block
-foldlM f b l u =
+  -> Software SBlock
+foldlSM f b l u =
   do for l u (\ix -> f b ix)
      return b
 
@@ -104,76 +102,8 @@ foldlM f b l u =
 
 ----------------------------------------
 
--- A block reperesents the 160-bit blocks that SHA1 operates over.
-type Block =
-  (SRef SWord32, SRef SWord32, SRef SWord32, SRef SWord32, SRef SWord32)
-
--- Short-hand for a block with unwrapped references.
-type B =
-  (SWord32, SWord32, SWord32, SWord32, SWord32)
-
--- Creates a new block based on the initial values given by SHA1.
-init_block :: Software Block
-init_block =
-  do a <- initRef 0x67452301
-     b <- initRef 0xefcdab89
-     c <- initRef 0x98badcfe
-     d <- initRef 0x10325476
-     e <- initRef 0xc3d2e1f0
-     return (a, b, c, d, e)
-
--- Creates a new block by copying the values of the given block.
-copy_block :: Block -> Software Block
-copy_block (a, b, c, d, e) =
-  do a' <- initRef =<< unsafeFreezeRef a
-     b' <- initRef =<< unsafeFreezeRef b
-     c' <- initRef =<< unsafeFreezeRef c
-     d' <- initRef =<< unsafeFreezeRef d
-     e' <- initRef =<< unsafeFreezeRef e
-     return (a', b', c', d', e')
-
--- Freezes each reference of a block.
-freeze_block :: Block -> Software B
-freeze_block (a, b, c, d, e) =
-  do a' <- unsafeFreezeRef a
-     b' <- unsafeFreezeRef b
-     c' <- unsafeFreezeRef c
-     d' <- unsafeFreezeRef d
-     e' <- unsafeFreezeRef e
-     return (a', b', c', d', e')
-
--- Joins two blocks by inplace, pair-wise adding values of the second block
--- into the first block.
-add_block :: Block -> Block -> Software Block
-add_block block@(a, b, c, d, e) (a', b', c', d', e') =
-  do ta <- unsafeFreezeRef a; ta' <- unsafeFreezeRef a'; setRef a (ta + ta')
-     tb <- unsafeFreezeRef b; tb' <- unsafeFreezeRef b'; setRef b (tb + tb')
-     tc <- unsafeFreezeRef c; tc' <- unsafeFreezeRef c'; setRef c (tc + tc')
-     td <- unsafeFreezeRef d; td' <- unsafeFreezeRef d'; setRef d (td + td')
-     te <- unsafeFreezeRef e; te' <- unsafeFreezeRef e'; setRef e (te + te')
-     return block
-
--- Translate a 160-bit block into an array of 20 8-bits.
-arr_block :: Block -> Software (SArr SWord8)
-arr_block (a, b, c, d, e) =
-  do ta  <- unsafeFreezeRef a
-     tb  <- unsafeFreezeRef b
-     tc  <- unsafeFreezeRef c
-     td  <- unsafeFreezeRef d
-     te  <- unsafeFreezeRef e
-     out <- newArr 20
-     let shift i = 8 * (3 - (i2n i)) :: SWord32
-     for 0 3 $ \i -> setArr out (i)      $ i2n (ta `shiftR` shift i)
-     for 0 3 $ \i -> setArr out (i + 4)  $ i2n (tb `shiftR` shift i)
-     for 0 3 $ \i -> setArr out (i + 8)  $ i2n (tc `shiftR` shift i)
-     for 0 3 $ \i -> setArr out (i + 12) $ i2n (td `shiftR` shift i)
-     for 0 3 $ \i -> setArr out (i + 16) $ i2n (te `shiftR` shift i)
-     return out
-
-----------------------------------------
-
-sha1_pad :: SArr SWord8 -> Software (SArr SWord8)
-sha1_pad message =
+soft_sha1_pad :: SArr SWord8 -> Software (SArr SWord8)
+soft_sha1_pad message =
   do let len = length message
      bits <- shareM (i2n len * 8 :: SWord64)
      pad  <- newArr 64
@@ -189,9 +119,9 @@ sha1_pad message =
        in  setArr pad i (i2n (bits `shiftR` shift))
      return pad
 
-sha1_extend :: SArr SWord8 -> Software (SIrr SWord32)
-sha1_extend message =
-  do pad    :: SArr SWord8  <- sha1_pad message
+soft_sha1_extend :: SArr SWord8 -> Software (SIrr SWord32)
+soft_sha1_extend message =
+  do pad    :: SArr SWord8  <- soft_sha1_pad message
      ex     :: SArr SWord32 <- newArr 80
      -- truncate original block.
      ipad   :: SIrr SWord8  <- unsafeFreezeArr pad
@@ -214,10 +144,143 @@ sha1_extend message =
      unsafeFreezeArr ex
 
 --------------------------------------------------------------------------------
+-- * Hardware
+--------------------------------------------------------------------------------
 
-test_sha1 :: Software ()
-test_sha1 =
-  do m <- msg
+type HRef    = Reference Hardware
+
+type HArr    = Array  Hardware
+type HIrr    = IArray Hardware
+type HIx     = Ix     Hardware
+
+type HBool   = HExp P.Bool
+type HWord8  = HExp Word8
+type HWord16 = HExp Word16
+type HWord32 = HExp Word32
+type HWord64 = HExp Word64
+
+type HBlock = Block Hardware
+type HB     = B     Hardware
+
+--------------------------------------------------------------------------------
+
+-- ...
+
+--------------------------------------------------------------------------------
+
+
+
+--------------------------------------------------------------------------------
+-- * Generic stuff.
+--------------------------------------------------------------------------------
+
+-- A block reperesents the 160-bit blocks that SHA1 operates over.
+type Block m =
+  ( Reference m (Expr m Word32)
+  , Reference m (Expr m Word32)
+  , Reference m (Expr m Word32)
+  , Reference m (Expr m Word32)
+  , Reference m (Expr m Word32)
+  )
+
+-- Short-hand for a block with unwrapped references.
+type B m =
+  ( Expr m Word32
+  , Expr m Word32
+  , Expr m Word32
+  , Expr m Word32
+  , Expr m Word32
+  )
+
+-- Creates a new block based on the initial values given by SHA1.
+init_block
+  :: (References m, SyntaxM m (Expr m Word32), Num (Expr m Word32))
+  => m (Block m)
+init_block =
+  do a <- initRef 0x67452301
+     b <- initRef 0xefcdab89
+     c <- initRef 0x98badcfe
+     d <- initRef 0x10325476
+     e <- initRef 0xc3d2e1f0
+     return (a, b, c, d, e)
+
+-- Creates a new block by copying the values of the given block.
+copy_block :: (References m, SyntaxM m (Expr m Word32)) => Block m -> m (Block m)
+copy_block (a, b, c, d, e) =
+  do a' <- initRef =<< unsafeFreezeRef a
+     b' <- initRef =<< unsafeFreezeRef b
+     c' <- initRef =<< unsafeFreezeRef c
+     d' <- initRef =<< unsafeFreezeRef d
+     e' <- initRef =<< unsafeFreezeRef e
+     return (a', b', c', d', e')
+
+-- Freezes each reference of a block.
+freeze_block :: (References m, SyntaxM m (Expr m Word32)) => Block m -> m (B m)
+freeze_block (a, b, c, d, e) =
+  do a' <- unsafeFreezeRef a
+     b' <- unsafeFreezeRef b
+     c' <- unsafeFreezeRef c
+     d' <- unsafeFreezeRef d
+     e' <- unsafeFreezeRef e
+     return (a', b', c', d', e')
+
+-- Joins two blocks by inplace, pair-wise adding values of the second block
+-- into the first block.
+add_block
+  :: (References m, SyntaxM m (Expr m Word32), Num (Expr m Word32))
+  => Block m -> Block m -> m (Block m)
+add_block block@(a, b, c, d, e) (a', b', c', d', e') =
+  do ta <- unsafeFreezeRef a; ta' <- unsafeFreezeRef a'; setRef a (ta + ta')
+     tb <- unsafeFreezeRef b; tb' <- unsafeFreezeRef b'; setRef b (tb + tb')
+     tc <- unsafeFreezeRef c; tc' <- unsafeFreezeRef c'; setRef c (tc + tc')
+     td <- unsafeFreezeRef d; td' <- unsafeFreezeRef d'; setRef d (td + td')
+     te <- unsafeFreezeRef e; te' <- unsafeFreezeRef e'; setRef e (te + te')
+     return block
+
+-- Translate a 160-bit block into an array of 20 8-bits.
+arr_block
+  :: forall m
+   . ( References m, Arrays m, Control m
+     , SyntaxM m (Expr m Word32)
+     , SyntaxM m (Expr m Word8)
+     , SyntaxM m (Ix m)
+       -- for plus and times.
+     , Num (Expr m Word32)
+     , Num (Expr m Word8)
+     , Num (Ix m)
+       -- for shifting and i2n.
+     , Bitwise (DomainOf m)
+     , Casting (DomainOf m)
+       -- shifting causes these, ok?
+     , Internal (Expr m Word32) ~ Word32
+     , Internal (Expr m Word8)  ~ Word8
+     , Internal (Ix m)          ~ Word8
+       -- i2n causes these, ok?
+     , PredicateOf (DomainOf m) Word32
+     , PredicateOf (DomainOf m) Word8
+     )
+  => Block m -> m (Array m (Expr m Word8))
+arr_block (a, b, c, d, e) =
+  do ta  <- unsafeFreezeRef a
+     tb  <- unsafeFreezeRef b
+     tc  <- unsafeFreezeRef c
+     td  <- unsafeFreezeRef d
+     te  <- unsafeFreezeRef e
+     out <- newArr 20
+     let shift i = 8 * (3 - (i2n i :: Expr m Word32))
+     for 0 3 $ \i -> setArr out (i)    (i2n (ta `shiftR` shift i) :: Expr m Word8)
+     for 0 3 $ \i -> setArr out (i+4)  (i2n (tb `shiftR` shift i) :: Expr m Word8)
+     for 0 3 $ \i -> setArr out (i+8)  (i2n (tc `shiftR` shift i) :: Expr m Word8)
+     for 0 3 $ \i -> setArr out (i+12) (i2n (td `shiftR` shift i) :: Expr m Word8)
+     for 0 3 $ \i -> setArr out (i+16) (i2n (te `shiftR` shift i) :: Expr m Word8)
+     return out
+
+--------------------------------------------------------------------------------
+-- * Test
+--------------------------------------------------------------------------------
+
+stest :: Software ()
+stest = msg >>= soft_sha1 >> return ()
 
 -- The msg is "The quick brown fox jumps over the lazy dog",
 -- represented with an Word8 encoding of its characters. 

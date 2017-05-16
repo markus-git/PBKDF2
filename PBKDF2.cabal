@@ -16,12 +16,29 @@ extra-source-files:  ChangeLog.md
 cabal-version:       >=1.10
 
 library
-  exposed-modules:     PBKDF2
+  exposed-modules:     PBKDF2,
+                       Co
   -- other-modules:       
   -- other-extensions:    
   build-depends:       base >=4.9 && <4.10,
                        bytestring >=0.10.8.1,
                        utf8-string >=1.0.1.1,
+                       deepseq >=1.4.2.0,
+                       QuickCheck >=2.9.2,
+                       Crypto >=4.2.5.1,
+                       language-vhdl,
+                       hardware-edsl,
+                       co-feldspar
+  hs-source-dirs:      src
+  default-language:    Haskell2010
+
+executable test_sha
+  main-is: Main.hs
+  
+  build-depends:       base >=4.9 && <4.10,
+                       bytestring >=0.10.8.1,
+                       utf8-string >=1.0.1.1,
+                       deepseq >=1.4.2.0,
                        QuickCheck >=2.9.2,
                        Crypto >=4.2.5.1,
                        language-vhdl,
