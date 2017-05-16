@@ -405,9 +405,20 @@ arr_block (a, b, c, d, e) =
 stest :: Software ()
 stest = msg >>= soft_sha1 >> return ()
 
+htest :: Hardware ()
+htest = msg >>= hard_sha1 >> return ()
+
 -- The msg is "The quick brown fox jumps over the lazy dog",
 -- represented with an Word8 encoding of its characters. 
-msg :: Software (SArr SWord8)
+msg
+  :: forall m
+   . ( Arrays m
+     , SyntaxM m (Expr m Word8)
+     , Num (Internal (Expr m Word8))
+     -- hmm...
+     , PredicateOf (DomainOf m) (Internal (Expr m Word8))
+     )
+  => m (Array m (Expr m Word8))
 msg = initArr [84,104,101,32,113,117,105,99,107,32,98,114,111,119,110,32,102,111,120,32,106,117,109,112,115,32,111,118,101,114,32,116,104,101,32,108,97,122,121,32,100,111,103]
 
 --------------------------------------------------------------------------------
