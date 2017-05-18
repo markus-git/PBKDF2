@@ -82,8 +82,7 @@ sha1 message =
      fb <- add_block ib cb
      -- translate the final block into an array of octets.
      sha1_block fb
-
---------------------------------------------------------------------------------
+     return message
 
 --------------------------------------------------------------------------------
 
@@ -103,8 +102,8 @@ sha1_pad message =
      for (len + 1) (55) $ \i -> setArr pad i 0
      -- add length in last 8 8-bits.
      for (56) (63) $ \i ->
-       do let shift = (8 * (63 - (i2n i))) :: HExp Word32
-          val <- shareM (bits `shiftR` shift)
+       do let shift = (8 * (63 - i)) :: HExp Integer
+          val <- shareM ((bits `shiftR` shift) :: HExp Word64)
           setArr pad i (i2n val)
      return pad
 
@@ -169,4 +168,6 @@ foldlHM f b l u =
 
 --------------------------------------------------------------------------------
 
-test = msg >>= sha1 >> return ()
+test = Hard.icompile (msg >>= sha1 >> return ())
+
+--------------------------------------------------------------------------------
