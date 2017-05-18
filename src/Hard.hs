@@ -81,7 +81,7 @@ sha1 message =
      -- add new block to previous block.
      fb <- add_block ib cb
      -- translate the final block into an array of octets.
-     arr_block fb
+     sha1_block fb
 
 --------------------------------------------------------------------------------
 
@@ -114,7 +114,7 @@ sha1_extend message =
      ex     :: HArr (HExp Word32) <- newArr 80
      -- truncate original block.
      ipad   :: HIrr (HExp Word8) <- unsafeFreezeArr pad
-     for 0 15 (\(i :: HExp Word8) ->
+     for 0 15 (\(i :: HExp Integer) ->
        setArr ex i
          (   (i2n $ ipad ! (i*4  ))
            + (i2n $ ipad ! (i*4+1)) `shiftL` (8  :: HExp Word32)
@@ -123,7 +123,7 @@ sha1_extend message =
          ))
      -- extend block with new words.
      iex   :: HIrr (HExp Word32) <- unsafeFreezeArr ex
-     for 16 79 (\(i :: HExp Word8) ->
+     for 16 79 (\(i :: HExp Integer) ->
        setArr ex i $ flip rotateL (1 :: HExp Word32)
          (       (iex ! (i-3 ))
            `xor` (iex ! (i-8 ))
@@ -168,3 +168,5 @@ foldlHM f b l u =
      return b
 
 --------------------------------------------------------------------------------
+
+test = msg >>= sha1 >> return ()
