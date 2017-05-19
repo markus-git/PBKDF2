@@ -85,11 +85,11 @@ sha1 message =
      ib <- init_block
      -- process the blocks of w.
      blocks <- shareM (length w `div` 80)
-     for (0) (blocks-1) $ (\(i :: SExp Word8) ->
+     for (0) (blocks-1) (\(i :: SExp Word8) ->
        do let w' = slice ((i*80)+0) ((i*80)+79) w
-          -- copy current block.
+          -- copy current block..
           cb <- copy_block ib
-          -- iterate step over block
+          -- iterate step over block.
           for (0) (79) $ \j -> step w j cb
           -- add new block to previous block.
           add_block ib cb)
@@ -106,12 +106,12 @@ sha1_pad message =
      imsg :: SIrr (SExp Word8) <- unsafeFreezeArr message
      pad  :: SArr (SExp Word8) <- newArr size
      -- copy original message.
-     for (0) (len - 1) $ \i ->
+     for (0) (len-1) $ \i ->
        setArr pad i (imsg !! i)
      -- add the single one.
      setArr pad len 1
      -- fill with zeroes.
-     for (len + 1) (size-9) $ \i ->
+     for (len+1) (size-9) $ \i ->
        setArr pad i 0
      -- add length in last 8 8-bits.
      for (size-8) (size-1) $ \i ->
@@ -122,13 +122,13 @@ sha1_extend :: SArr (SExp Word8) -> Software (SIrr (SExp Word32))
 sha1_extend pad =
   do let len = length pad
      blocks <- shareM (len `div` 64)
-     ex     :: SArr (SExp Word32) <- newArr (80 * blocks)
-     ipad   :: SIrr (SExp Word8)  <- unsafeFreezeArr pad
+     ipad :: SIrr (SExp Word8)  <- unsafeFreezeArr pad
+     ex   :: SArr (SExp Word32) <- newArr (80 * blocks)
      -- truncate original block.
      for (0) (blocks-1) $ (\(b :: SExp Word8) -> do
        po <- shareM (b * 16)
        bo <- shareM (b * 80)
-       for (0) (15) (\(i :: SExp Word8) -> do
+       for (0) (15) (\(i :: SExp Word8) ->
          setArr ex (b+i)
            (   (i2n $ ipad ! (po+(i*4)))
              + (i2n $ ipad ! (po+(i*4)+1)) `shiftL` (8  :: SExp Word32)
@@ -139,7 +139,7 @@ sha1_extend pad =
      iex :: SIrr (SExp Word32) <- unsafeFreezeArr ex
      for (0) (blocks-1) (\(b :: SExp Word8) -> do
        bo <- shareM (b * 80)
-       for (bo+16) (bo+79) (\(i :: SExp Word8) -> do
+       for (bo+16) (bo+79) (\(i :: SExp Word8) ->
          setArr ex i $ flip rotateL (1 :: SExp Word32)
            (       (iex ! (i-3))
              `xor` (iex ! (i-8))

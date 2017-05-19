@@ -44,8 +44,8 @@ type HB     = B     Hardware
 --
 --------------------------------------------------------------------------------
 
-sha1 :: HArr HWord8 -> Hardware (HArr HWord8)
-sha1 message =
+sha1 :: Integer -> HArr HWord8 -> Hardware (HArr HWord8)
+sha1 blocks message =
   do let f :: HInt -> HWord32 -> HWord32 -> HWord32 -> HWord32
          f t b c d =
            (0  <= t && t <= 19) ?? ((b .&. c) .|. (complement b .&. d)) $
@@ -71,64 +71,71 @@ sha1 message =
               setRef rb (a)
               setRef ra (temp)
 
-          -- format the message according to SHA1.
-     w  <- sha1_extend message
+     -- format the message according to SHA1.
+     let b = value blocks
+     p  <- sha1_pad    b message
+     w  <- sha1_extend b p
      -- fetch the initial 160-bit block.
      ib <- init_block
-     -- process the first (and only!) block of w.
-     cb <- copy_block ib
-     foldlHM (\b ix -> step w ix b) cb 0 79
-     -- add new block to previous block.
-     fb <- add_block ib cb
+     -- process the blocks of w.
+     for (0) (b-1) (\(i :: HExp Integer) ->
+       do -- copy the current block.
+          cb <- copy_block ib
+          -- iterate step over block.
+          for (0) (79) $ \i -> step w i cb
+          -- add new block to previous block.
+          add_block ib cb)
      -- translate the final block into an array of octets.
-     sha1_block fb
-     return message
+     sha1_block ib
 
 --------------------------------------------------------------------------------
 
-sha1_pad :: HArr (HExp Word8) -> Hardware (HArr (HExp Word8))
-sha1_pad message =
-  do let len = length message
-     bits <- shareM (i2n len * 8 :: HExp Word64)
-     pad  <- newArr 64
+sha1_pad :: HInt -> HArr (HExp Word8) -> Hardware (HArr (HExp Word8))
+sha1_pad blocks message =
+  do let len = length message :: HInt
+     bits :: HWord64           <- shareM (i2n len * 8)
+     size :: HInt              <- shareM (64 * blocks)
+     imsg :: HIrr (HExp Word8) <- unsafeFreezeArr message
+     pad  :: HArr (HExp Word8) <- newArr (64 * blocks)
      -- copy original message.
-     --copyArr pad message
-     for (0) (len - 1) $ \i ->
-       do v <- getArr message i
-          setArr pad i v
+     for (0) (len-1) $ \i ->
+       setArr pad i (imsg !! i)
      -- add the single one.
-     setArr  pad len 1
+     setArr pad len 1
      -- fill with zeroes.
-     for (len + 1) (55) $ \i -> setArr pad i 0
+     for (len+1) (size-9) $ \i ->
+       setArr pad i 0
      -- add length in last 8 8-bits.
-     for (56) (63) $ \i ->
-       do let shift = (8 * (63 - i)) :: HExp Integer
-          val <- shareM ((bits `shiftR` shift) :: HExp Word64)
-          setArr pad i (i2n val)
+     for (size-8) (size-1) $ \i ->
+       setArr pad i (i2n (bits `shiftR` (8 * ((size-1) - i))))
      return pad
 
-sha1_extend :: HArr (HExp Word8) -> Hardware (HIrr (HExp Word32))
-sha1_extend message =
-  do pad    :: HArr (HExp Word8)  <- sha1_pad message
-     ex     :: HArr (HExp Word32) <- newArr 80
+sha1_extend :: HInt -> HArr (HExp Word8) -> Hardware (HIrr (HExp Word32))
+sha1_extend blocks pad =
+  do ipad :: HIrr (HExp Word8)  <- unsafeFreezeArr pad
+     ex   :: HArr (HExp Word32) <- newArr (80 + blocks)
      -- truncate original block.
-     ipad   :: HIrr (HExp Word8) <- unsafeFreezeArr pad
-     for 0 15 (\(i :: HExp Integer) ->
-       setArr ex i
-         (   (i2n $ ipad ! (i*4  ))
-           + (i2n $ ipad ! (i*4+1)) `shiftL` (8  :: HExp Word32)
-           + (i2n $ ipad ! (i*4+2)) `shiftL` (16 :: HExp Word32)
-           + (i2n $ ipad ! (i*4+3)) `shiftL` (24 :: HExp Word32)
-         ))
+     for (0) (blocks-1) $ (\(b :: HExp Integer) -> do
+       po <- shareM (b * 16)
+       bo <- shareM (b * 80)
+       for (0) (15) (\(i :: HExp Integer) ->
+         setArr ex (b+i)
+           (   (i2n $ ipad ! (po+(i*4)))
+             + (i2n $ ipad ! (po+(i*4)+1)) `shiftL` (8  :: HExp Integer)
+             + (i2n $ ipad ! (po+(i*4)+2)) `shiftL` (16 :: HExp Integer)
+             + (i2n $ ipad ! (po+(i*4)+3)) `shiftL` (24 :: HExp Integer)
+           )))
      -- extend block with new words.
-     iex   :: HIrr (HExp Word32) <- unsafeFreezeArr ex
-     for 16 79 (\(i :: HExp Integer) ->
-       setArr ex i $ flip rotateL (1 :: HExp Word32)
-         (       (iex ! (i-3 ))
-           `xor` (iex ! (i-8 ))
-           `xor` (iex ! (i-14))
-           `xor` (iex ! (i-16))
-         ))
+     iex :: HIrr (HExp Word32) <- unsafeFreezeArr ex
+     for (0) (blocks-1) (\(b :: HExp Integer) -> do
+       bo <- shareM (b * 80)
+       for (bo+16) (bo+79) (\(i :: HExp Integer) ->
+         setArr ex i $ flip rotateL (1 :: HExp Word32)
+           (       (iex ! (i-3))
+             `xor` (iex ! (i-8))
+             `xor` (iex ! (i-14))
+             `xor` (iex ! (i-16))
+           )))
      unsafeFreezeArr ex
 
 -- Translate a 160-bit block into an array of 20 8-bits.
@@ -150,10 +157,10 @@ sha1_block (a, b, c, d, e) =
 
 --------------------------------------------------------------------------------
   
-(??) :: HBool -> HWord32 -> HWord32 -> HWord32
+(??) :: HType a => HBool -> HExp a -> HExp a -> HExp a
 (??) = (?)
 
-(!!) :: HIrr HWord32 -> HInt -> HWord32
+(!!) :: HType a => HIrr (HExp a) -> HInt -> HExp a
 (!!) = (!)
 
 foldlHM
@@ -168,6 +175,6 @@ foldlHM f b l u =
 
 --------------------------------------------------------------------------------
 
-test = Hard.icompile (msg >>= sha1 >> return ())
+test = Hard.icompile (msg >>= sha1 2 >> return ())
 
 --------------------------------------------------------------------------------
