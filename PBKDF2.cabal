@@ -16,8 +16,8 @@ extra-source-files:  ChangeLog.md
 cabal-version:       >=1.10
 
 library
-  exposed-modules:     Hard,
-                       Soft,
+  exposed-modules:     Hard, Hard2,
+                       Soft, Soft2,
                        PBKDF2,
                        Co
                        

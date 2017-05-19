@@ -6,15 +6,16 @@ module Soft where
 
 import Co
 
+import Data.Bits (Bits)
 import Control.Applicative
-import Control.Monad
+import Control.Monad hiding ((>>))
 
 import Feldspar
 import Feldspar.Software
 
 import qualified Feldspar.Software.Compile as Soft
 
-import Prelude (undefined, flip, (.), ($), Bool(..), Num(..))
+import Prelude (undefined, flip, (.), ($), Bool(..), Num(..), Integral)
 
 --------------------------------------------------------------------------------
 -- * Software
@@ -36,23 +37,117 @@ type SBlock = Block Software
 type SB     = B     Software
 
 --------------------------------------------------------------------------------
--- ** HMAC-SHA1
+-- ** PBKDF2
 --------------------------------------------------------------------------------
+-- todo: in the example, we assume the password <35 chars and salt =16 chars.
+
+pbkdf2 :: SArr SWord8 -> SArr SWord8 -> SWord8 -> SWord8 -> Software (SArr SWord8)
+pbkdf2 password salt c dkLen =
+  do let l = dkLen `div` 20
+
+     let us_init :: SWord32 -> Software (SArr SWord8)
+         us_init i = do
+           bits  <- int4b i
+           whole <- salt +++ bits
+           hmac password whole
+
+     let f :: SWord32 -> Software (SArr SWord8)
+         f i = foldlM (\u _ -> hmac password u >>= mxor u) (us_init i) 1 (c-1)
+
+     let ts :: Software (SArr SWord8)
+         ts = concatMapM (\i -> f (i2n i)) 0 (l-1)
+
+     slice 0 dkLen <$> ts
+
+--------------------------------------------------------------------------------
+
+concatMapM
+  :: (SExp Index -> Software (SArr SWord8))
+  -> SExp Index
+  -> SExp Index
+  -> Software (SArr SWord8)
+concatMapM fun lower upper =
+  do res :: SArr SWord8 <- newArr (20 + 20 * (i2n (upper - lower)) :: SIx)
+     for lower upper $ \i ->
+       do let ix = i*20
+          n <- fun i
+          copyArr (slice (ix) (ix+19) res) n
+     return res
+
+foldlM
+  :: (SType' b, Integral b)
+  => (SArr a -> SExp b -> Software ())
+  -> Software (SArr a)
+  -> SExp b
+  -> SExp b
+  -> Software (SArr a)
+foldlM fun init lower upper =
+  do u <- init
+     for lower upper $ \i ->
+       do fun u i
+     return u
+
+int4b :: SWord32 -> Software (SArr SWord8)
+int4b i =
+  do arr :: SArr SWord8 <- newArr 4
+     setArr arr 0 $ i2n (i >> 24)
+     setArr arr 1 $ i2n (i >> 16)
+     setArr arr 2 $ i2n (i >> 8)
+     setArr arr 3 $ i2n (i)
+     return arr
+
+mxor :: SArr SWord8 -> SArr SWord8 -> Software ()
+mxor u n =
+  do ui :: SIrr SWord8 <- unsafeFreezeArr u
+     ni :: SIrr SWord8 <- unsafeFreezeArr n
+     for 0 (length u) $ \i ->
+       setArr u i ((ui ! i) `xor` (ni ! i))
+
+--------------------------------------------------------------------------------
+-- ** Simplified example of HMAC-SHA1.
+--------------------------------------------------------------------------------
+-- todo: for simplicity, this only creates a single block. For more blocks,
+--       simply exdent the length of the padded key and ipad/opad to the length
+--       of an entire block.
 
 hmac :: SArr SWord8 -> SArr SWord8 -> Software (SArr SWord8)
-hmac msg key = undefined
+hmac msg {-<35-} key {-20-} =
+  do opad <- hmac_xpad (0x5c) key
+     ipad <- hmac_xpad (0x36) key
+     temp <- hmac_prf ipad msg
+     hmac_prf opad temp
+
+hmac_prf :: SArr SWord8 -> SArr SWord8 -> Software (SArr SWord8)
+hmac_prf a b = (a +++ b) >>= sha1
+
+hmac_xpad :: SWord8 -> SArr SWord8 -> Software (SArr SWord8)
+hmac_xpad v key {-20-} =
+  do pad  :: SArr SWord8 <- newArr 20
+     ikey :: SIrr SWord8 <- unsafeFreezeArr key
+     for 0 19 $ \i -> setArr pad i (v `xor` (ikey ! i))
+     return pad
 
 --------------------------------------------------------------------------------
--- ** SHA1
+
+(+++) :: SArr SWord8 -> SArr SWord8 -> Software (SArr SWord8)
+(+++) a {-20-} b {-<35-} =
+  do let len = length a + length b
+     ia :: SIrr SWord8 <- unsafeFreezeArr a
+     ib :: SIrr SWord8 <- unsafeFreezeArr b
+     c  :: SArr SWord8 <- newArr len
+     copyArr c a
+     copyArr (slice (length b) len c) b
+     return c
+
 --------------------------------------------------------------------------------
---
--- todo: for simplicity we have assumed that SHA1 only ever reveieves <55
---       octets to hash, and thus only needs one 512-bit block.
---
+-- ** Simplified example of SHA1.
 --------------------------------------------------------------------------------
+-- todo: for simplicity, this one handles only a single block. For more blocks,
+--       simply extend the hardcoded limits on arrays to variables and add an
+--       extra fold to 'sha1' for applying the inner (do ..) to each block.
 
 sha1 :: SArr SWord8 -> Software (SArr SWord8)
-sha1 message =
+sha1 message {-<55-} =
   do let f :: SWord8 -> SWord32 -> SWord32 -> SWord32 -> SWord32
          f t b c d =
            (0  <= t && t <= 19) ?? ((b .&. c) .|. (complement b .&. d)) $
@@ -71,26 +166,23 @@ sha1 message =
          step w t block@(ra, rb, rc, rd, re) =
            do (a, b, c, d, e) <- freeze_block block
               temp <- shareM $
-                a `rotateL` (5 :: SWord32) + (f t b c d) + e + (w !! t) + (k t)
+                (a |<<| 5) + (f t b c d) + e + (w !! t) + (k t)
               setRef re (d)
               setRef rd (c)
-              setRef rc (b `rotateL` (30 :: SWord32))
+              setRef rc (b |<<| 30)
               setRef rb (a)
               setRef ra (temp)
 
      -- format the message according to SHA1.
-     p  <- sha1_pad message
+     p  <- sha1_pad    message
      w  <- sha1_extend p
      -- fetch the initial 160-bit block.
      ib <- init_block
-     -- process the blocks of w.
-     blocks <- shareM (length w `div` 80)
-     for (0) (blocks-1) (\(i :: SExp Word8) ->
-       do let w' = slice ((i*80)+0) ((i*80)+79) w
-          -- copy current block..
+     -- process block of w.
+     (do -- copy current block.
           cb <- copy_block ib
           -- iterate step over block.
-          for (0) (79) $ \j -> step w j cb
+          for (0) (79) $ \i -> step w i cb
           -- add new block to previous block.
           add_block ib cb)
      -- translate the final block into an array of octets.
@@ -100,9 +192,9 @@ sha1 message =
 
 sha1_pad :: SArr (SExp Word8) -> Software (SArr (SExp Word8))
 sha1_pad message =
-  do let len = length message
-     bits <- shareM (i2n len * 8 :: SExp Word64)
-     size <- shareM (64 * (1 + (len `div` 64)))
+  do let size = 64 :: SWord8
+     let len  = length message :: SWord8
+     bits <- shareM (i2n len * 8 :: SWord64)
      imsg :: SIrr (SExp Word8) <- unsafeFreezeArr message
      pad  :: SArr (SExp Word8) <- newArr size
      -- copy original message.
@@ -115,37 +207,30 @@ sha1_pad message =
        setArr pad i 0
      -- add length in last 8 8-bits.
      for (size-8) (size-1) $ \i ->
-       setArr pad i (i2n (bits `shiftR` (8 * ((size-1) - i))))
+       setArr pad i (i2n (bits >> (i2n (8 * ((size-1) - i)))))
      return pad
 
 sha1_extend :: SArr (SExp Word8) -> Software (SIrr (SExp Word32))
 sha1_extend pad =
-  do let len = length pad
-     blocks <- shareM (len `div` 64)
-     ipad :: SIrr (SExp Word8)  <- unsafeFreezeArr pad
-     ex   :: SArr (SExp Word32) <- newArr (80 * blocks)
+  do ipad :: SIrr (SExp Word8)  <- unsafeFreezeArr pad
+     ex   :: SArr (SExp Word32) <- newArr (80)
      -- truncate original block.
-     for (0) (blocks-1) $ (\(b :: SExp Word8) -> do
-       po <- shareM (b * 16)
-       bo <- shareM (b * 80)
-       for (0) (15) (\(i :: SExp Word8) ->
-         setArr ex (b+i)
-           (   (i2n $ ipad ! (po+(i*4)))
-             + (i2n $ ipad ! (po+(i*4)+1)) `shiftL` (8  :: SExp Word32)
-             + (i2n $ ipad ! (po+(i*4)+2)) `shiftL` (16 :: SExp Word32)
-             + (i2n $ ipad ! (po+(i*4)+3)) `shiftL` (24 :: SExp Word32)
-           )))
+     for (0) (15) $ \i ->
+       setArr ex i
+         (   (i2n $ ipad ! ((i*4)))
+           + (i2n $ ipad ! ((i*4)+1) << 8)
+           + (i2n $ ipad ! ((i*4)+2) << 16)
+           + (i2n $ ipad ! ((i*4)+3) << 32)
+         )
      -- extend block with new words.
      iex :: SIrr (SExp Word32) <- unsafeFreezeArr ex
-     for (0) (blocks-1) (\(b :: SExp Word8) -> do
-       bo <- shareM (b * 80)
-       for (bo+16) (bo+79) (\(i :: SExp Word8) ->
-         setArr ex i $ flip rotateL (1 :: SExp Word32)
-           (       (iex ! (i-3))
-             `xor` (iex ! (i-8))
-             `xor` (iex ! (i-14))
-             `xor` (iex ! (i-16))
-           )))
+     for 16 79 $ \i ->
+       setArr ex i $
+         (       (iex ! (i-3))
+           `xor` (iex ! (i-8))
+           `xor` (iex ! (i-14))
+           `xor` (iex ! (i-16))
+         ) |<<| 1
      unsafeFreezeArr ex
 
 -- Translate a 160-bit block into an array of 20 8-bits.
@@ -173,6 +258,18 @@ sha1_block (a, b, c, d, e) =
 (!!) :: SType a => SIrr (SExp a) -> SWord8 -> SExp a
 (!!) = (!)
 
+(<<) :: (SType' a, Bits a) => SExp a -> SWord32 -> SExp a
+(<<) = shiftL
+
+(>>) :: (SType' a, Bits a) => SExp a -> SWord32 -> SExp a
+(>>) = shiftR
+
+(|<<|) :: (SType' a, Bits a) => SExp a -> SWord32 -> SExp a
+(|<<|) = rotateL
+
+(|>>|) :: (SType' a, Bits a) => SExp a -> SWord32 -> SExp a
+(|>>|) = rotateR
+
 foldlSM
   :: (SBlock -> SWord8 -> Software ()) -- update function.
   -> SBlock -- initial block.
@@ -185,6 +282,8 @@ foldlSM f b l u =
 
 --------------------------------------------------------------------------------
 
-test = Soft.icompile (msg >>= sha1 >> return ())
+test_hmac = Soft.icompile (msg >>= \m -> hmac m m >>= \_ -> return ())
+
+test_sha1 = Soft.icompile (msg >>= \m -> sha1 m >>= \_ -> return ())
 
 --------------------------------------------------------------------------------
