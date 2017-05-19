@@ -90,14 +90,13 @@ freeze_block (a, b, c, d, e) =
 -- into the first block.
 add_block
   :: (References m, SyntaxM m (Expr m Word32), Num (Expr m Word32))
-  => Block m -> Block m -> m (Block m)
+  => Block m -> Block m -> m ()
 add_block block@(a, b, c, d, e) (a', b', c', d', e') =
   do ta <- unsafeFreezeRef a; ta' <- unsafeFreezeRef a'; setRef a (ta + ta')
      tb <- unsafeFreezeRef b; tb' <- unsafeFreezeRef b'; setRef b (tb + tb')
      tc <- unsafeFreezeRef c; tc' <- unsafeFreezeRef c'; setRef c (tc + tc')
      td <- unsafeFreezeRef d; td' <- unsafeFreezeRef d'; setRef d (td + td')
      te <- unsafeFreezeRef e; te' <- unsafeFreezeRef e'; setRef e (te + te')
-     return block
 
 --------------------------------------------------------------------------------
 -- * Test
