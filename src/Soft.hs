@@ -282,8 +282,18 @@ foldlSM f b l u =
 
 --------------------------------------------------------------------------------
 
-test_hmac = Soft.icompile (msg >>= \m -> hmac m m >>= \_ -> return ())
+test_pbkdf2 = Soft.icompile $ do
+  m <- msg
+  s <- salt16
+  pbkdf2 m s 10 3
 
-test_sha1 = Soft.icompile (msg >>= \m -> sha1 m >>= \_ -> return ())
+test_hmac = Soft.icompile $ do
+  m <- msg
+  s <- salt20
+  hmac m s
+
+test_sha1 = Soft.icompile $ do
+  m <- msg
+  sha1 m
 
 --------------------------------------------------------------------------------

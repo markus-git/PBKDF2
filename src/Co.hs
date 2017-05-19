@@ -1,6 +1,6 @@
 {-# language FlexibleContexts #-}
 {-# language GADTs #-}
-
+{-# language ConstraintKinds #-}
 {-# language ScopedTypeVariables #-}
 
 module Co where
@@ -102,18 +102,17 @@ add_block block@(a, b, c, d, e) (a', b', c', d', e') =
 -- * Test
 --------------------------------------------------------------------------------
 
--- The msg is "The quick brown fox jumps over the lazy dog",
--- represented with an Word8 encoding of its characters. 
-msg
-  :: forall m
-   . ( Arrays m
-     , SyntaxM m (Expr m Word8)
-     , Num (Internal (Expr m Word8))
-     -- hmm...
-     , PredicateOf (DomainOf m) (Internal (Expr m Word8))
-     )
-  => m (Array m (Expr m Word8))
-msg = initArr [84,104,101,32,113,117,105,99,107,32,98,114,111,119,110,32,102,111,120,32,106,117,109,112,115,32,111,118,101,114,32,116,104,101,32,108,97,122,121,32,100,111,103]
+type Msg m = (Arrays m, SyntaxM m (Expr m Word8), Num (Internal (Expr m Word8)), PredicateOf (DomainOf m) (Internal (Expr m Word8)))
+
+-- "The quick brown fox",
+msg :: forall m . Msg m => m (Array m (Expr m Word8))
+msg = initArr [84,104,101,32,113,117,105,99,107,32,98,114,111,119,110,32,102,111,120]
+
+salt16 :: forall m . Msg m => m (Array m (Expr m Word8))
+salt16 = initArr [84,104,101,32,113,117,105,99,107,32,98,114,111,119,110,32]
+
+salt20 :: forall m . Msg m => m (Array m (Expr m Word8))
+salt20 = initArr [84,104,101,32,113,117,105,99,107,32,98,114,111,119,110,32,102,111,120,32]
 
 ----------------------------------------
 
