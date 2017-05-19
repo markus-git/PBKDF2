@@ -40,10 +40,7 @@ type HB     = B     Hardware
 --------------------------------------------------------------------------------
 -- ** SHA1
 --------------------------------------------------------------------------------
---
--- todo: same assumption as for software version.
---
---------------------------------------------------------------------------------
+-- todo: same as for the software version.
 
 sha1 :: HArr HWord8 -> Hardware (HArr HWord8)
 sha1 message =
@@ -73,7 +70,7 @@ sha1 message =
               setRef ra (temp)
 
      -- format the message according to SHA1.
-     p  <- sha1_pad    message
+     p  <- sha1_pad message
      w  <- sha1_extend p
      -- fetch the initial 160-bit block.
      ib <- init_block
@@ -87,6 +84,7 @@ sha1 message =
      -- translate the final block into an array of octets.
      sha1_block ib
 
+-- ghdl
 --------------------------------------------------------------------------------
 
 sha1_pad :: HArr (HExp Word8) -> Hardware (HArr (HExp Word8))
@@ -182,6 +180,8 @@ foldlHM f b l u =
 
 --------------------------------------------------------------------------------
 
-test = Hard.icompile (msg >>= sha1 >>= \_ -> return ())
+test_sha1 = Hard.icompile $ do
+  m <- msg
+  sha1 m
 
 --------------------------------------------------------------------------------
