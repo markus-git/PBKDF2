@@ -114,6 +114,11 @@ hmac :: SArr SWord8 -> SArr SWord8 -> Software (SArr SWord8)
 hmac msg {-<35-} key {-20-} =
   do opad <- hmac_xpad (0x5c) key
      ipad <- hmac_xpad (0x36) key
+{-
+     temp1 <- ipad +++ msg
+     temp2 <- opad +++ temp1
+     return temp2
+-}
      temp <- hmac_prf ipad msg
      hmac_prf opad temp
 
@@ -136,7 +141,7 @@ hmac_xpad v key {-20-} =
      ib :: SIrr SWord8 <- unsafeFreezeArr b
      c  :: SArr SWord8 <- newArr len
      copyArr c a
-     copyArr (slice (length b) len c) b
+     copyArr (slice (length a) len c) b
      return c
 
 --------------------------------------------------------------------------------
@@ -220,7 +225,7 @@ sha1_extend pad =
          (   (i2n $ ipad ! ((i*4)))
            + (i2n $ ipad ! ((i*4)+1) << 8)
            + (i2n $ ipad ! ((i*4)+2) << 16)
-           + (i2n $ ipad ! ((i*4)+3) << 32)
+           + (i2n $ ipad ! ((i*4)+3) << 24)
          )
      -- extend block with new words.
      iex :: SIrr (SExp Word32) <- unsafeFreezeArr ex
