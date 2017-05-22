@@ -41,7 +41,7 @@ type SB     = B     Software
 --------------------------------------------------------------------------------
 -- todo: in the example, we assume the password <35 chars and salt =16 chars.
 
-pbkdf2 :: SArr SWord8 -> SArr SWord8 -> SWord8 -> SWord8 -> Software (SArr SWord8)
+pbkdf2 :: SArr SWord8 -> SArr SWord8 -> SWord32 -> SWord32 -> Software (SArr SWord8)
 pbkdf2 password salt c dkLen =
   do let l = dkLen `div` 20
 
@@ -62,16 +62,16 @@ pbkdf2 password salt c dkLen =
 --------------------------------------------------------------------------------
 
 concatMapM
-  :: (SExp Index -> Software (SArr SWord8))
-  -> SExp Index
-  -> SExp Index
-  -> Software (SArr SWord8)
+  :: ( SyntaxM Software a, Slicable (SExp b) (SArr a)
+     , SType' b, Integral b)
+  => (SExp b -> Software (SArr a))
+  -> SExp b
+  -> SExp b
+  -> Software (SArr a)
 concatMapM fun lower upper =
-  do res :: SArr SWord8 <- newArr (20 + 20 * (i2n (upper - lower)) :: SIx)
+  do res <- newArr (20 * (i2n (upper - lower + 1)) :: SIx)
      for lower upper $ \i ->
-       do let ix = i*20
-          n <- fun i
-          copyArr (slice (ix) (ix+19) res) n
+       fun i >>= copyArr (slice ((i*20)) ((i*20)+19) res)
      return res
 
 foldlM
@@ -148,21 +148,21 @@ hmac_xpad v key {-20-} =
 
 sha1 :: SArr SWord8 -> Software (SArr SWord8)
 sha1 message {-<55-} =
-  do let f :: SWord8 -> SWord32 -> SWord32 -> SWord32 -> SWord32
+  do let f :: SExp Index -> SWord32 -> SWord32 -> SWord32 -> SWord32
          f t b c d =
            (0  <= t && t <= 19) ?? ((b .&. c) .|. (complement b .&. d)) $
            (20 <= t && t <= 39) ?? (b `xor` c `xor` d) $
            (40 <= t && t <= 59) ?? ((b .&. c) .|. (b .&. d) .|. (c .&. d))
                                  $ (b `xor` c `xor` d)
 
-     let k :: SWord8 -> SWord32
+     let k :: SExp Index -> SWord32
          k t =
            (0  <= t && t <= 19) ?? 0x5a827999 $
            (20 <= t && t <= 39) ?? 0x6ed9eba1 $
            (40 <= t && t <= 59) ?? 0x8f1bbcdc
                                  $ 0xca62c1d6
 
-     let step :: SIrr SWord32 -> SWord8 -> SBlock -> Software ()
+     let step :: SIrr SWord32 -> SWord32 -> SBlock -> Software ()
          step w t block@(ra, rb, rc, rd, re) =
            do (a, b, c, d, e) <- freeze_block block
               temp <- shareM $
@@ -192,8 +192,8 @@ sha1 message {-<55-} =
 
 sha1_pad :: SArr (SExp Word8) -> Software (SArr (SExp Word8))
 sha1_pad message =
-  do let size = 64 :: SWord8
-     let len  = length message :: SWord8
+  do let size = 64 :: SWord32
+     let len  = length message :: SWord32
      bits <- shareM (i2n len * 8 :: SWord64)
      imsg :: SIrr (SExp Word8) <- unsafeFreezeArr message
      pad  :: SArr (SExp Word8) <- newArr size
@@ -255,7 +255,7 @@ sha1_block (a, b, c, d, e) =
 (??) :: SType a => SBool -> SExp a -> SExp a -> SExp a
 (??) = (?)
 
-(!!) :: SType a => SIrr (SExp a) -> SWord8 -> SExp a
+(!!) :: SType a => SIrr (SExp a) -> SExp Index -> SExp a
 (!!) = (!)
 
 (<<) :: (SType' a, Bits a) => SExp a -> SWord32 -> SExp a
@@ -285,7 +285,7 @@ foldlSM f b l u =
 test_pbkdf2 = Soft.icompile $ do
   m <- msg
   s <- salt16
-  pbkdf2 m s 10 3
+  pbkdf2 m s 4096 256
 
 test_hmac = Soft.icompile $ do
   m <- msg
